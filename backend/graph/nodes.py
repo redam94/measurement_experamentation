@@ -19,6 +19,11 @@ from ..output.spec import generate_spec_json, generate_spec_yaml
 from ..output.scaffold import generate_combined_scaffold
 
 
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+MAX_FOLLOWUP_ROUNDS = 2  # max follow-up attempts per topic before accepting unknowns
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _make_llm(model: str = "claude-opus-4-5") -> ChatAnthropic:
@@ -56,27 +61,134 @@ async def _extract_facts(
         return {}
 
 
+def _check_extraction_sufficient(topic: str, extracted: dict, facts: dict) -> tuple[bool, str | None]:
+    """
+    Check whether extraction got the critical values for this topic.
+
+    Returns (is_sufficient, missing_description_or_None).
+    """
+    if topic == "objective":
+        kpi = facts.get("kpi") or extracted.get("kpi")
+        obj = facts.get("primary_objective") or extracted.get("primary_objective")
+        if kpi in (None, "unknown") and obj in (None, "other", "unknown"):
+            return False, "the specific metric (KPI) they want to move"
+        if kpi in (None, "unknown"):
+            return False, "the specific metric (KPI) they want to move"
+        return True, None
+
+    if topic == "randomization":
+        unit = facts.get("randomization_unit") or extracted.get("randomization_unit")
+        if unit in (None, "unknown"):
+            return False, "whether they can control who sees the ad"
+        return True, None
+
+    if topic == "data_history":
+        weeks = facts.get("pre_period_weeks") or extracted.get("pre_period_weeks")
+        has_data = facts.get("has_historical_data")
+        if has_data is None:
+            has_data = extracted.get("has_historical_data")
+        if weeks is None and has_data:
+            return False, "roughly how many weeks/months of historical data they have"
+        return True, None
+
+    if topic == "geo_structure":
+        markets = facts.get("num_markets") or extracted.get("num_markets")
+        if markets is None:
+            return False, "how many markets/locations are involved"
+        return True, None
+
+    if topic == "scale":
+        size = facts.get("sample_size_estimate") or extracted.get("sample_size_estimate")
+        if size in (None, "unknown"):
+            return False, "a rough sense of audience size"
+        return True, None
+
+    # treatment_control and covariates: always sufficient (no critical unknowns)
+    return True, None
+
+
 async def _ask_question(
     topic_meta: dict,
     conversation_history: list,
     facts_so_far: dict,
     llm: ChatAnthropic,
+    *,
+    is_followup: bool = False,
+    missing_info: str | None = None,
 ) -> str:
-    """Ask the next elicitation question, rephrased naturally given conversation history."""
-    base_question = topic_meta["question"]
+    """
+    Ask the next elicitation question, rephrased naturally given conversation history.
+
+    When is_followup=True, the question is a gentle follow-up because the initial
+    answer was incomplete. The missing_info describes what we still need.
+    """
     context = "\n".join(
         [
             f"{'User' if isinstance(m, HumanMessage) else 'Assistant'}: {m.content}"
             for m in conversation_history[-6:]  # last 3 turns
         ]
     )
+
+    # Build adaptive instruction parts
+    instruction_parts = []
+
+    if is_followup and missing_info:
+        # Use the topic's dedicated followup_question if available
+        followup_q = topic_meta.get("followup_question")
+        if followup_q:
+            instruction_parts.append(
+                f"This is a FOLLOW-UP. The user already answered, but we still need to "
+                f"understand: {missing_info}.\n"
+                f"Use this follow-up question as inspiration (rephrase naturally): "
+                f"{followup_q}\n"
+                f"Acknowledge what they already shared, then ask specifically for the "
+                f"missing information. Offer concrete examples or options to choose from."
+            )
+        else:
+            instruction_parts.append(
+                f"This is a FOLLOW-UP. The user already answered, but we still need to "
+                f"understand: {missing_info}.\n"
+                f"Acknowledge what they already shared, then ask specifically for the "
+                f"missing information. Offer concrete examples or options to choose from."
+            )
+    else:
+        base_question = topic_meta["question"]
+        instruction_parts.append(
+            f"Base question: {base_question}"
+        )
+
+    # Add examples and clarification hints for the LLM to use
+    examples = topic_meta.get("examples", [])
+    hints = topic_meta.get("clarification_hints", [])
+    why = topic_meta.get("why_it_matters", "")
+
+    if examples:
+        instruction_parts.append(
+            f"Example answers the user might give (use these to frame your question "
+            f"if helpful): {'; '.join(examples[:3])}"
+        )
+    if hints and is_followup:
+        instruction_parts.append(
+            f"If the user seems confused, try one of these angles: "
+            f"{'; '.join(hints[:2])}"
+        )
+    if why:
+        instruction_parts.append(
+            f"Why this matters (use sparingly — only if the user asks why): {why}"
+        )
+
+    instruction_parts.append(
+        "Rephrase naturally to fit the conversation flow. Keep it in plain English, "
+        "ONE to THREE sentences at most. Use a friendly, encouraging tone. "
+        "If offering examples, use bullet points. "
+        "Do NOT answer the question — only ask it."
+    )
+
     prompt = (
         f"The next topic to ask about is: {topic_meta['topic']}\n\n"
-        f"Base question: {base_question}\n\n"
+        f"Facts gathered so far: {json.dumps(facts_so_far, default=str)}\n\n"
         f"Recent conversation:\n{context}\n\n"
-        "Rephrase the base question naturally to fit the conversation. "
-        "Keep it in plain English, ONE sentence or two at most. "
-        "Do NOT answer the question — only ask it."
+        + "\n\n".join(instruction_parts)
     )
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
@@ -98,6 +210,7 @@ async def welcome_node(state: AgentState) -> dict:
         "scores": {},
         "ranked_methods": [],
         "clarify_rounds": 0,
+        "followup_round": 0,
         "report_markdown": "",
         "spec_json": {},
         "spec_yaml": "",
@@ -111,16 +224,18 @@ async def question_node(state: AgentState) -> dict:
     """
     Process the user's latest reply:
       1. Extract structured facts for the current topic.
-      2. Mark that topic as covered.
-      3. If topics remain, ask the next question and return (→ END).
-      4. If all topics are done, set phase='score' (→ score_node).
-
-    This node is called once per user turn, never self-loops.
+      2. Check if the extraction got all critical information.
+      3. If critical info is missing and we haven't exceeded follow-up limit,
+         ask a follow-up question (topic stays uncovered).
+      4. If sufficient or max follow-ups reached, mark topic covered.
+      5. If topics remain, ask the next question.
+      6. If all topics done, run a completeness check and set phase='score'.
     """
     llm = _make_llm()
     covered = list(state.get("covered_topics", []))
     facts = dict(state.get("elicited_facts") or {})
     messages = list(state.get("messages", []))
+    followup_round = state.get("followup_round", 0)
 
     # The first uncovered topic is the one the user is answering right now.
     remaining = [t for t in ELICITATION_TOPICS if t not in covered]
@@ -132,6 +247,7 @@ async def question_node(state: AgentState) -> dict:
             "covered_topics": covered,
             "phase": "score",
             "messages": [],
+            "followup_round": 0,
         }
 
     current_topic = remaining[0]
@@ -142,16 +258,41 @@ async def question_node(state: AgentState) -> dict:
         (m for m in reversed(messages) if isinstance(m, HumanMessage)),
         None,
     )
+    extracted = {}
     if last_human:
         extracted = await _extract_facts(last_human.content, current_meta, llm)
-        facts.update(extracted)
+        # Merge into facts (skip null/None values)
+        for k, v in extracted.items():
+            if v is not None:
+                facts[k] = v
 
-    # Mark this topic as covered
+    # Check if we got the critical information for this topic
+    is_sufficient, missing_desc = _check_extraction_sufficient(
+        current_topic, extracted, facts
+    )
+
+    if not is_sufficient and followup_round < MAX_FOLLOWUP_ROUNDS:
+        # Ask a follow-up for the SAME topic (don't mark as covered)
+        question_text = await _ask_question(
+            current_meta, messages, facts, llm,
+            is_followup=True,
+            missing_info=missing_desc,
+        )
+        return {
+            "elicited_facts": facts,
+            "covered_topics": covered,  # NOT marked covered yet
+            "messages": [AIMessage(content=question_text)],
+            "pending_question": question_text,
+            "phase": "elicit",
+            "followup_round": followup_round + 1,
+        }
+
+    # Topic is complete (sufficient or max follow-ups reached)
     covered_now = covered + [current_topic]
     still_remaining = [t for t in ELICITATION_TOPICS if t not in covered_now]
 
     if still_remaining:
-        # Ask the next question and return → END (wait for user)
+        # Ask the next question and reset follow-up counter
         next_meta = TOPIC_INDEX[still_remaining[0]]
         question_text = await _ask_question(next_meta, messages, facts, llm)
 
@@ -161,6 +302,7 @@ async def question_node(state: AgentState) -> dict:
             "messages": [AIMessage(content=question_text)],
             "pending_question": question_text,
             "phase": "elicit",
+            "followup_round": 0,
         }
 
     # All topics covered → transition to scoring pipeline
@@ -169,6 +311,7 @@ async def question_node(state: AgentState) -> dict:
         "covered_topics": covered_now,
         "phase": "score",
         "messages": [],
+        "followup_round": 0,
     }
 
 async def score_node(state: AgentState) -> dict:

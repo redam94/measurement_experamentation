@@ -107,24 +107,35 @@ async def _ask_setup_question(
     if preamble:
         instruction_parts.append(
             f"IMPORTANT — Before asking the question, present this feasibility update "
-            f"to the user (rewrite it naturally in your own words, keeping all the "
-            f"numbers and warnings):\n\n{preamble}\n"
+            f"to the user. Rewrite it in your own words using plain, friendly language. "
+            f"Keep all the numbers and warnings, but explain what they mean in everyday "
+            f"terms (e.g., 'you'd need about 10,000 customers in your test' instead of "
+            f"'required sample size is 10,000'):\n\n{preamble}\n"
         )
     if followup_context:
         instruction_parts.append(
             f"This is a FOLLOW-UP question. The user already answered, but we still "
             f"need: {followup_context}\n"
-            f"Acknowledge what they already provided, then ask specifically for the "
-            f"missing information. Be helpful — offer to estimate from ranges or "
-            f"qualitative descriptions."
+            f"Acknowledge what they already provided — make them feel heard. Then ask "
+            f"specifically for the missing information. Be helpful:\n"
+            f"- Offer concrete examples or ranges to choose from\n"
+            f"- Suggest you can estimate from rough descriptions (like 'pretty stable' "
+            f"  vs 'swings a lot')\n"
+            f"- If the user seems stuck, offer industry benchmarks as a starting point\n"
+            f"- Never make them feel bad for not knowing something"
         )
     else:
         instruction_parts.append(
             "Rephrase the base question naturally to fit the conversation. "
-            "Keep it in plain English, ONE sentence or two at most. "
-            "Provide sensible defaults where applicable."
+            "Use plain English — explain any technical concept with an analogy or "
+            "example. Keep it to ONE to THREE sentences plus optional bullet examples. "
+            "Provide sensible defaults where applicable and frame them as: "
+            "'Most teams use __, which works well. Sound good?'"
         )
-    instruction_parts.append("Do NOT answer the question — only ask it.")
+    instruction_parts.append(
+        "Do NOT answer the question — only ask it. "
+        "Use a warm, encouraging tone."
+    )
 
     prompt = (
         f"The next topic to ask about is: {topic_meta['topic']}\n\n"
@@ -461,14 +472,25 @@ def _format_feasibility_message(
 # ── Nodes ─────────────────────────────────────────────────────────────────────
 
 async def setup_welcome_node(state: SetupState) -> dict:
-    """Emit the setup welcome message and prepare the state."""
+    """Emit the setup welcome message with the first question and prepare the state."""
+    llm = _make_llm()
     method_name = state.get("chosen_method_name", "your chosen method")
     method_key = state.get("chosen_method_key", "")
 
     welcome = SETUP_WELCOME_TEMPLATE.format(method_name=method_name)
 
+    # Also generate the first setup question (baseline_metrics) so the user
+    # immediately knows what to answer, rather than seeing a generic intro.
+    first_topic = SETUP_TOPICS[0]  # "baseline_metrics"
+    first_meta = SETUP_TOPIC_INDEX[first_topic]
+    first_question = await _ask_setup_question(
+        first_meta, method_key, [], llm,
+    )
+
+    combined_message = f"{welcome}\n{first_question}"
+
     return {
-        "messages": [AIMessage(content=welcome)],
+        "messages": [AIMessage(content=combined_message)],
         "setup_phase": "setup_elicit",
         "setup_topics_covered": [],
         "setup_params": {
@@ -486,7 +508,7 @@ async def setup_welcome_node(state: SetupState) -> dict:
         "power_curve_json": "",
         "synthetic_data_csv": "",
         "done": False,
-        "pending_question": welcome,
+        "pending_question": combined_message,
         # Adaptive elicitation state
         "followup_round": 0,
         "feasibility_checked": False,

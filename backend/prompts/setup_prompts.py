@@ -9,35 +9,56 @@ SETUP_SYSTEM_PROMPT = """\
 You are a friendly, expert experimental design statistician helping a non-technical \
 stakeholder set up their chosen measurement method for an ad campaign.
 
+The person you are speaking with may have NO statistics background. They might be a \
+marketing manager, brand director, or business owner who wants to run a test but \
+has never done one before.
+
 Your job now is to gather the practical details needed to:
 1. Calculate the required sample size and statistical power.
 2. Run a Monte Carlo simulation to find the minimum detectable effect (MDE).
 3. Generate realistic synthetic data so the team can test their analysis before launch.
 
-Guidelines:
-- Ask ONE clear question at a time.
-- Use plain English — no jargon without a simple explanation.
-- Provide sensible defaults and let the user confirm or override.
-- When the user does not know a value, suggest a reasonable range from industry benchmarks.
+## Language & Tone
+- **Plain language first.** Never use jargon without immediately explaining it in \
+  everyday terms. For example, say "how many people you'll need in your test" instead \
+  of "required sample size."
+- **Use analogies** to explain concepts. For instance, compare statistical power to \
+  a metal detector's sensitivity — the more sensitive, the smaller the nugget it can find.
+- Be warm, patient, and encouraging. If the user seems unsure, validate their uncertainty \
+  and offer concrete options to choose from.
+
+## Adaptive Strategy
+- Ask **ONE clear question** at a time.
+- **Provide sensible defaults** and let the user confirm or override. Frame defaults as: \
+  "Most teams use __, which works well for most situations. Sound good?"
+- When the user does not know a value, **suggest a reasonable range** from industry \
+  benchmarks with context: "For an e-commerce conversion rate, 2-5% is typical."
 - **Probe for variability / standard deviation** — this is critical for power calculations. \
   If the user does not volunteer a standard deviation, ask about the typical range \
-  (lowest vs highest week), or typical spread across units.  You can also offer to \
-  estimate it from a coefficient of variation (e.g., "If your average is 5,000 and \
-  it typically swings between 4,000 and 6,000, the standard deviation is roughly 500.").
+  (lowest vs highest week), or typical spread across units. Offer to estimate it: \
+  "If your average is 5,000 and it typically swings between 4,000 and 6,000, \
+  the variability is roughly 500 — I can work with that."
 - When you notice a potential problem with the design (e.g., very few markets, very \
   small expected effect relative to variability, very short pre-period), **raise the \
-  concern explicitly** and suggest concrete alternatives the user could consider.
+  concern explicitly in plain language** and suggest concrete alternatives.
+- **Confirm understanding** after each answer before moving on: briefly restate what \
+  you heard in one sentence.
+- **Never make the user feel bad** for not knowing something. Use phrases like \
+  "That's totally normal — most teams aren't sure about this" or "Great, I can work with that."
 """
 
 SETUP_WELCOME_TEMPLATE = """\
 Great — you've chosen **{method_name}** as your measurement approach! 🎯
 
-Before we generate your analysis code, let me help you set up the experiment properly. \
-I'll walk you through a few practical questions so I can:
+Now I'll help you set everything up so you can run a solid test. Don't worry — I'll \
+walk you through it step by step, and I'll suggest sensible starting points for \
+anything you're not sure about.
 
-1. **Calculate the sample size** you'll need for reliable results.
-2. **Find the minimum detectable effect** — the smallest real improvement your test can spot.
-3. **Generate synthetic test data** so you can validate the analysis pipeline before launch.
+Here's what we'll figure out together:
+
+1. **How many people (or markets) you'll need** for reliable results
+2. **The smallest real improvement your test can spot** — so you know what's realistic
+3. **A practice dataset** so your team can test the analysis before launch
 
 Let's start with the basics…
 """
@@ -50,54 +71,62 @@ SETUP_TOPIC_QUESTIONS: list[dict] = [
         "topic": "baseline_metrics",
         "question_template": {
             "ab_test": (
-                "What is your current baseline conversion rate (or the average value of "
-                "your KPI)? For example, if 3 out of every 100 visitors normally convert, "
-                "that's a 3% baseline.\n\n"
-                "Also — how much does this rate vary day-to-day or week-to-week? For "
-                "instance, does it swing between 2% and 4%, or is it very stable? This "
-                "variability is key for figuring out how many users you'll need."
+                "Let's talk about your starting point. What does your key metric look "
+                "like *right now*, before the campaign?\n\n"
+                "For example, if you're tracking conversions: 'About 3 out of every 100 "
+                "visitors buy something — so a 3% conversion rate.'\n\n"
+                "And here's one that's really important: **how much does that number "
+                "bounce around?** Is it pretty steady week to week, or does it swing a "
+                "lot? For instance, 'Some weeks it's 2%, other weeks it's 4%.' "
+                "Knowing this helps me figure out how many people you'll need in your test."
             ),
             "did": (
-                "What's the typical weekly average for your KPI across your treatment "
-                "and control groups before the campaign starts?\n\n"
-                "Equally important: how variable is it week to week? For example, "
-                "'about 5,000 sales per market per week, but it ranges from 3,500 to "
-                "6,500 in a typical month.' If you're not sure of the exact standard "
-                "deviation, giving me the lowest and highest typical weeks is just as useful."
+                "What does your key metric typically look like in your markets *before* "
+                "the campaign starts?\n\n"
+                "For example: 'About 5,000 sales per market per week.'\n\n"
+                "And just as important: **how much does it bounce around** from week "
+                "to week? Like, 'It ranges from about 3,500 to 6,500 in a normal month.' "
+                "If you're not sure of the exact spread, just telling me the highest and "
+                "lowest typical weeks is great — I can work from there."
             ),
             "ddml": (
-                "What's the average value of your outcome variable (KPI), and roughly "
-                "how spread out is it across users? For example, 'average revenue per "
-                "user is $50, with most users between $10 and $120.'\n\n"
-                "I need both the average **and** the spread (standard deviation or range) "
-                "to calculate how many observations you'll need."
+                "What's the typical value of the outcome you're measuring, per person? "
+                "For example: 'Average revenue per user is about $50.'\n\n"
+                "And how spread out is it? For instance: 'Most users spend between $10 "
+                "and $120.' I need both the average **and** the spread to figure out "
+                "how many observations you'll need."
             ),
             "geo_lift": (
-                "What's the typical weekly KPI value for an average market/geo before "
-                "the campaign starts? And how much does it vary **between** markets as "
-                "well as **within** a market week-to-week?\n\n"
-                "For example: 'avg 2,000 conversions/week/market, ranging from 500 to "
-                "5,000 across markets, and a given market might swing ±300 week to week.'"
+                "For an average market, what does your key metric look like in a typical "
+                "week *before* the campaign? For example: 'About 2,000 conversions per "
+                "market per week.'\n\n"
+                "I also need to know: **how different are markets from each other**, and "
+                "**how much does a single market bounce around** week to week? Something "
+                "like: 'Markets range from 500 to 5,000, and an individual market might "
+                "swing ±300 in a normal week.'"
             ),
             "synthetic_control": (
-                "What's the typical weekly KPI value for your treatment region and "
-                "the average donor market? How stable is it over time?\n\n"
-                "Specifically, I need the average level and how much it fluctuates "
-                "week-to-week (e.g., '10,000 units/week for the treatment region, "
-                "usually within ±1,000')."
+                "For the region you want to test in (and the comparison regions), what "
+                "does your metric typically look like each week? And **how stable** is "
+                "it over time?\n\n"
+                "For example: '10,000 units per week in our test region, usually within "
+                "±1,000 of that.' The more stable the metric, the easier it is to detect "
+                "a real change."
             ),
             "matched_market": (
-                "What's the typical weekly KPI value per market, and how much does it "
-                "vary between your matched pairs?\n\n"
-                "For example, 'about 1,200 sales/week/market, pairs are usually within "
-                "200 of each other, and individual markets swing ±150 week-to-week.'"
+                "For your matched markets, what's the typical weekly value of your metric? "
+                "And **how closely do the matched pairs track each other**?\n\n"
+                "For example: 'About 1,200 sales/week/market, and our matched pairs are "
+                "usually within 200 of each other. Individual markets might swing ±150 "
+                "week to week.'"
             ),
             "_default": (
-                "What is your current baseline value for the KPI you're measuring? "
-                "A rough estimate is fine — for example, a conversion rate, "
-                "average weekly sales, or another metric.\n\n"
-                "Also, how much does this KPI typically vary? Knowing the range "
-                "(lowest to highest typical value) helps me calculate the right sample size."
+                "What is your key metric currently at — before the campaign starts? "
+                "A rough estimate is perfectly fine — for example, a conversion rate, "
+                "average weekly sales, or another number.\n\n"
+                "And here's one that really matters: **how much does it bounce around?** "
+                "If you can tell me the lowest and highest values you see in a normal "
+                "week or month, I can work from there."
             ),
         },
         "extraction_prompt": (
@@ -116,10 +145,14 @@ SETUP_TOPIC_QUESTIONS: list[dict] = [
         "topic": "expected_effect",
         "question_template": {
             "_default": (
-                "How big an effect do you expect (or hope) the campaign will have? "
-                "This can be a percentage lift (e.g., '10% improvement') or an absolute "
-                "change (e.g., '+0.5 percentage points on conversion rate'). "
-                "If you're unsure, I can suggest typical ranges for your type of campaign."
+                "Now for the big question: **how much of an improvement do you expect "
+                "(or hope) the campaign will create?**\n\n"
+                "This can be:\n"
+                "- A percentage lift, like 'we're hoping for about a 10% increase'\n"
+                "- An absolute change, like 'we want to add 0.5 percentage points to "
+                "our conversion rate'\n\n"
+                "If you're not sure, that's totally fine! I can suggest typical ranges "
+                "for your type of campaign — just tell me and I'll give you some benchmarks."
             ),
         },
         "extraction_prompt": (
@@ -135,12 +168,16 @@ SETUP_TOPIC_QUESTIONS: list[dict] = [
         "topic": "statistical_design",
         "question_template": {
             "_default": (
-                "I'll use some standard defaults, but let me check: are you happy with a "
-                "**5% significance level** (95% confidence) and **80% power**? "
-                "These are very standard choices. Also, do you want a one-sided test "
-                "(only checking if the campaign *helped*) or two-sided "
-                "(checking if it helped *or hurt*)?\n\n"
-                "Just say 'defaults are fine' if you'd like to keep the standard settings."
+                "For the technical settings, I'll suggest some standard defaults that "
+                "work great for most teams:\n\n"
+                "- **95% confidence level** — meaning we want to be 95% sure any result "
+                "we see is real, not just random noise\n"
+                "- **80% power** — meaning an 80% chance of catching a real effect if "
+                "one exists (like a metal detector that finds the nugget 4 out of 5 times)\n"
+                "- **Two-sided test** — checking whether the campaign helped *or* hurt, "
+                "not just one direction\n\n"
+                "Do these defaults sound good to you, or would you like to adjust "
+                "anything? (Most teams stick with the defaults — they're a great starting point.)"
             ),
         },
         "extraction_prompt": (
@@ -156,37 +193,46 @@ SETUP_TOPIC_QUESTIONS: list[dict] = [
         "topic": "method_specific",
         "question_template": {
             "ab_test": (
-                "Last detail: do you know roughly how many users will be in each group "
-                "(treatment and control)? Or should I calculate the minimum needed?"
+                "Last thing! Do you know roughly how many people will be in each group "
+                "(the group that sees the ad and the group that doesn't)? Or would you "
+                "like me to calculate the minimum number you'll need?"
             ),
             "did": (
-                "How many treatment units (markets/groups) and control units do you have? "
-                "And how many time periods before and after the campaign? "
-                "(e.g., '5 treatment markets, 10 control markets, 12 weeks pre, 8 weeks post')"
+                "A few more details about your setup: how many treatment groups (the "
+                "ones getting the ad) and control groups (the ones without) do you have? "
+                "And how many time periods before and after the campaign?\n\n"
+                "For example: '5 markets with the ad, 10 without, 12 weeks of history "
+                "before, and the campaign runs for 8 weeks.'"
             ),
             "ddml": (
-                "Roughly how many observations (users/rows) will you have? "
-                "And how many covariates/features are available for the ML models? "
-                "(e.g., '50,000 users with about 20 demographic and behavioral features')"
+                "Roughly how many people (or data rows) will you have to work with? "
+                "And how many pieces of background information (like age, location, "
+                "past purchases) are available per person?\n\n"
+                "For example: '50,000 users with about 20 demographic and behavioral features.'"
             ),
             "geo_lift": (
-                "How many treatment geos and control geos will you have? "
-                "And how many weeks before/after the campaign? "
-                "(e.g., '8 test markets, 25 holdout markets, 12 weeks pre, 6 weeks post')"
+                "How many markets will run the campaign (treatment group) and how many "
+                "will be kept as a comparison (holdout group)? And how many weeks of data "
+                "do you have before and after the campaign?\n\n"
+                "For example: '8 test markets, 25 holdout markets, 12 weeks before, "
+                "6 weeks during the campaign.'"
             ),
             "synthetic_control": (
-                "How many donor (control) markets do you have, and how many treatment "
-                "regions? Also, how many pre-campaign and post-campaign time periods? "
-                "(e.g., '1 treatment state, 20 donor states, 52 weeks pre, 12 weeks post')"
+                "How many comparison regions (we call them 'donors') do you have, and "
+                "how many regions are getting the campaign? Also, how many time periods "
+                "before and after?\n\n"
+                "For example: '1 state with the campaign, 20 comparison states, a year "
+                "of weekly data before, and 12 weeks of campaign data.'"
             ),
             "matched_market": (
-                "How many matched pairs of markets do you have? "
-                "And how long is the pre-period and test period? "
-                "(e.g., '6 matched pairs, 8 weeks pre, 4 weeks test')"
+                "How many matched pairs of markets do you have? And how long is the "
+                "pre-period (before the campaign) and the test period?\n\n"
+                "For example: '6 matched pairs of similar cities, 8 weeks of history "
+                "before, and a 4-week test.'"
             ),
             "_default": (
-                "A few more details about your specific setup: how many treatment and "
-                "control units do you have, and how many time periods before and after?"
+                "A few more details: how many treatment and control units do you have, "
+                "and how many time periods before and after the campaign?"
             ),
         },
         "extraction_prompt": (
@@ -210,36 +256,42 @@ SETUP_TOPIC_INDEX: dict[str, dict] = {t["topic"]: t for t in SETUP_TOPIC_QUESTIO
 
 BASELINE_FOLLOWUP_TEMPLATES: dict[str, str] = {
     "missing_std": (
-        "Thanks for the baseline value! One more thing I need to size your experiment "
-        "properly: **how much does your KPI typically vary?**\n\n"
-        "If you're not sure of the exact standard deviation, any of these would help:\n"
-        "- The **lowest and highest** weekly values you've seen recently "
-        "(I can estimate the spread from that)\n"
-        "- A rough sense like 'it's pretty stable' vs 'it swings a lot'\n"
-        "- The **coefficient of variation** if your data team can pull it\n\n"
-        "This variability drives how many {units} you'll need, so it's worth getting "
-        "a reasonable estimate."
+        "Thanks for the baseline number! One more thing that's really important for "
+        "sizing your test: **how much does your metric bounce around?**\n\n"
+        "Any of these would help me estimate it:\n"
+        "- The **highest and lowest** values you've seen in a typical month "
+        "(I can do the math from there)\n"
+        "- A general sense like 'it's pretty steady' vs 'it swings a lot'\n"
+        "- If your data team can pull it, the standard deviation or coefficient "
+        "of variation\n\n"
+        "This one really matters — a metric that bounces around a lot needs more "
+        "{units} to produce a reliable test."
     ),
     "missing_baseline": (
-        "I didn't quite catch a concrete baseline number. Could you give me a rough "
-        "estimate of your KPI's current average value?\n\n"
+        "I want to make sure I have a clear starting point. "
+        "Could you give me a rough idea of what your metric typically looks like?\n\n"
         "For example:\n"
-        "- A conversion rate like '2.5%'\n"
-        "- An average value like '$45 per user' or '3,200 sales per week'\n\n"
-        "Even a ballpark is fine — I'll use it as a starting point for the power calculation."
+        "- A rate like '2.5% of visitors convert'\n"
+        "- An average value like '$45 per customer' or '3,200 sales per week'\n\n"
+        "Even a ballpark works great — I just need a starting point to figure out "
+        "how big your test needs to be."
     ),
     "missing_both": (
-        "To calculate the right sample size, I need two pieces of information about "
-        "your KPI:\n\n"
-        "1. **The current average** (e.g., '3% conversion rate' or '$50/user')\n"
-        "2. **How much it varies** (e.g., 'conversions range from 2% to 4% week-to-week')\n\n"
-        "If you're not sure, I can suggest typical industry values — just let me know "
-        "what type of KPI you're tracking (conversion rate, revenue, engagement, etc.)."
+        "To figure out how big your test needs to be, I need two things about "
+        "your metric:\n\n"
+        "1. **Where it is now** — the current average (like '3% conversion rate' "
+        "or '$50 per customer')\n"
+        "2. **How much it bounces around** — the typical range (like 'conversions "
+        "range from 2% to 4% week-to-week')\n\n"
+        "If you're not sure, no worries — just tell me what type of metric it is "
+        "(conversion rate, revenue, engagement, etc.) and I can suggest typical "
+        "industry values to start with."
     ),
     "unreasonable_values": (
-        "I want to double-check a couple of numbers: {detail}\n\n"
-        "Could you confirm or correct these? Getting the baseline right is important "
-        "because it directly affects how many {units} you'll need for a reliable test."
+        "I want to double-check a couple of numbers with you: {detail}\n\n"
+        "Could you confirm or adjust these? Getting the starting point right is "
+        "important because it directly affects how many {units} you'll need for "
+        "a reliable test."
     ),
 }
 
@@ -376,8 +428,16 @@ SETUP_EXTRACTION_SYSTEM = (
     "Convert percentages to decimals (e.g. '10%' → 0.10). "
     "If the user describes variability as a range (low to high), estimate "
     "standard deviation as (high - low) / 4. "
-    "If the user says 'defaults are fine' or similar, use the standard defaults "
-    "mentioned in the question (alpha=0.05, power=0.80, one_sided=false)."
+    "If the user says 'defaults are fine', 'sounds good', 'that works', or similar, "
+    "use the standard defaults mentioned in the question (alpha=0.05, power=0.80, "
+    "one_sided=false). "
+    "The user is non-technical, so interpret colloquial language generously:\n"
+    "- 'pretty stable' / 'doesn't change much' → low CV (~0.10–0.15)\n"
+    "- 'swings a bit' / 'some variation' → moderate CV (~0.20–0.30)\n"
+    "- 'all over the place' / 'really bounces around' → high CV (~0.40–0.60)\n"
+    "- 'huge swings' / 'wildly unpredictable' → very high CV (~0.60+)\n"
+    "When the user gives a CV description and a baseline value, compute "
+    "std = CV × baseline_value."
 )
 
 

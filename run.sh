@@ -39,7 +39,7 @@ start_api() {
 
 start_ui() {
     echo "▶  Starting Streamlit UI on http://localhost:$UI_PORT ..."
-    streamlit run frontend/app.py --server.port "$UI_PORT"
+    streamlit run frontend/Home.py --server.port "$UI_PORT"
 }
 
 case "$MODE" in

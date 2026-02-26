@@ -401,6 +401,132 @@ async def get_setup_status(session_id: str) -> dict:
     }
 
 
+@app.get("/sessions/{session_id}/setup/mde-detail")
+async def get_mde_detail(session_id: str) -> dict:
+    """Return full MDE results including the power_by_effect curve."""
+    if session_id not in _setup_sessions:
+        raise HTTPException(status_code=404, detail="Setup session not found.")
+    state = _setup_sessions[session_id]
+    if not state.get("done"):
+        raise HTTPException(status_code=400, detail="Setup is not yet complete.")
+    return state.get("mde_results") or {}
+
+
+@app.get("/sessions/{session_id}/setup/sensitivity")
+async def get_sensitivity(session_id: str) -> dict:
+    """Compute power across a grid of (alpha, effect_size) combinations."""
+    if session_id not in _setup_sessions:
+        raise HTTPException(status_code=404, detail="Setup session not found.")
+    state = _setup_sessions[session_id]
+    if not state.get("done"):
+        raise HTTPException(status_code=400, detail="Setup is not yet complete.")
+
+    from .simulation.power import compute_power
+
+    base_params = dict(state.get("setup_params") or {})
+    facts = dict(state.get("elicited_facts") or {})
+    method_key = state.get("chosen_method_key", "ab_test")
+
+    # Determine baseline for relative effect grid
+    baseline_rate = base_params.get("baseline_rate")
+    baseline_val = base_params.get("baseline_metric_value", 100.0)
+    base_value = baseline_rate if (baseline_rate and baseline_rate > 0) else baseline_val
+
+    alphas = [0.01, 0.025, 0.05, 0.10, 0.15, 0.20]
+    effect_pcts = [0.01, 0.02, 0.03, 0.05, 0.075, 0.10, 0.15, 0.20, 0.30, 0.50]
+
+    grid: list[dict] = []
+    for a in alphas:
+        for ep in effect_pcts:
+            params = dict(base_params)
+            params["alpha"] = a
+            if baseline_rate and baseline_rate > 0:
+                params["expected_lift_abs"] = baseline_rate * ep
+                params.pop("expected_lift_pct", None)
+            else:
+                params["expected_lift_abs"] = baseline_val * ep
+                params.pop("expected_lift_pct", None)
+            try:
+                res = compute_power(method_key, params, facts)
+                power_val = res.get("achieved_power", 0) or 0
+            except Exception:
+                power_val = 0.0
+            grid.append({
+                "alpha": a,
+                "effect_rel_pct": round(ep * 100, 1),
+                "effect_abs": round(base_value * ep, 6),
+                "power": round(power_val, 4),
+            })
+
+    return {
+        "grid": grid,
+        "alphas": alphas,
+        "effect_pcts": [round(e * 100, 1) for e in effect_pcts],
+        "method_key": method_key,
+        "note": "Power computed analytically for each (alpha, effect_size) pair.",
+    }
+
+
+@app.get("/methods/{method_key}/template")
+async def get_method_template(method_key: str) -> dict:
+    """Return column schema and CSV template for a given method."""
+    from .simulation.synthetic import (
+        synthetic_ab_test_proportions,
+        synthetic_ab_test_continuous,
+        synthetic_did,
+        synthetic_geo_lift,
+        synthetic_synthetic_control,
+        synthetic_matched_market,
+        synthetic_ddml,
+    )
+
+    templates = {
+        "ab_test": lambda: synthetic_ab_test_proportions(
+            baseline_rate=0.05, lift_abs=0.005, n_per_group=3, seed=0,
+        ),
+        "ab_test_continuous": lambda: synthetic_ab_test_continuous(
+            baseline_mean=100.0, baseline_std=30.0, lift_abs=5.0, n_per_group=3, seed=0,
+        ),
+        "did": lambda: synthetic_did(
+            baseline_metric_value=100.0, baseline_metric_std=30.0, lift_abs=5.0,
+            num_treatment_units=2, num_control_units=2, num_pre_periods=2, num_post_periods=2,
+            seed=0,
+        ),
+        "geo_lift": lambda: synthetic_geo_lift(
+            baseline_metric_value=5000.0, baseline_metric_std=1500.0, lift_abs=250.0,
+            num_treatment_geos=2, num_control_geos=2, num_pre_periods=2, num_post_periods=2,
+            seed=0,
+        ),
+        "synthetic_control": lambda: synthetic_synthetic_control(
+            baseline_metric_value=100.0, baseline_metric_std=20.0, lift_abs=10.0,
+            num_donor_units=3, num_pre_periods=3, num_post_periods=2, seed=0,
+        ),
+        "matched_market": lambda: synthetic_matched_market(
+            baseline_metric_value=5000.0, baseline_metric_std=1500.0, lift_abs=250.0,
+            num_pairs=2, num_pre_periods=2, num_post_periods=2, seed=0,
+        ),
+        "ddml": lambda: synthetic_ddml(
+            baseline_metric_value=100.0, baseline_metric_std=30.0, lift_abs=5.0,
+            n_obs=5, n_covariates=3, seed=0,
+        ),
+    }
+
+    if method_key not in templates:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown method: {method_key}. Valid: {list(templates.keys())}",
+        )
+
+    result = templates[method_key]()
+    return {
+        "method_key": method_key,
+        "columns": result["columns"],
+        "csv_template": result["csv_string"],
+        "n_rows": result["n_rows"],
+        "description": result["description"],
+    }
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "version": "0.1.0"}

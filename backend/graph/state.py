@@ -98,5 +98,8 @@ class AgentState(TypedDict):
     # Pending question to surface to the user (set by question_node)
     pending_question: str
 
+    # Number of follow-up rounds on the current topic (reset when topic changes)
+    followup_round: int
+
     # Flag set by the streaming API to detect when the graph has finished
     done: bool
