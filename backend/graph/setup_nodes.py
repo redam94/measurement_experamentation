@@ -29,6 +29,10 @@ from ..prompts.setup_prompts import (
     BASELINE_FOLLOWUP_TEMPLATES,
     FEASIBILITY_PREAMBLE_TEMPLATE,
     RED_FLAG_CATALOG,
+    METHOD_ASSUMPTIONS,
+    REVIEW_RESULTS_PROMPT,
+    REVIEW_DECISION_SYSTEM,
+    REDESIGN_ELICIT_PROMPT,
 )
 from ..simulation.power import compute_power
 from ..simulation.mde import compute_mde
@@ -775,7 +779,7 @@ async def validation_node(state: SetupState) -> dict:
             msg += f"- **p-value**: {validation['p_value']:.4f}\n"
         msg += (
             f"\n{validation.get('summary', '')}\n\n"
-            "Generating your setup report now…"
+            "Reviewing your results now…"
         )
     else:
         msg = (
@@ -783,12 +787,12 @@ async def validation_node(state: SetupState) -> dict:
             f"{validation.get('error_message', 'Validation encountered an issue.')}\n\n"
             "This is expected for some methods with small synthetic datasets. "
             "The generated scaffold is still valid — the validation is just conservative. "
-            "Generating your setup report now…"
+            "Reviewing your results now…"
         )
 
     return {
         "validation_results": validation,
-        "setup_phase": "setup_output",
+        "setup_phase": "review_results",
         "messages": [AIMessage(content=msg)],
     }
 
@@ -883,6 +887,256 @@ async def setup_output_node(state: SetupState) -> dict:
         "done": True,
         "messages": [AIMessage(content=done_msg)],
         "red_flags": red_flags,
+    }
+
+
+# ── Review results node ──────────────────────────────────────────────────────
+
+def _build_assumptions_summary(method_key: str) -> str:
+    """Build a concise assumptions summary for the review message."""
+    method_info = METHOD_ASSUMPTIONS.get(method_key)
+    if not method_info:
+        return "No specific assumptions documented."
+    parts = []
+    for a in method_info["assumptions"]:
+        parts.append(f"- **{a['name']}**: {a['plain_language']}")
+    return "\n".join(parts)
+
+
+def _identify_design_problems(
+    power_results: dict,
+    mde_results: dict,
+    red_flags: list,
+    params: dict,
+    method_key: str,
+) -> str:
+    """Summarise key design problems for the redesign elicitation prompt."""
+    problems = []
+    achieved_power = power_results.get("achieved_power", 0) or 0
+    if achieved_power < 0.80:
+        problems.append(
+            f"Power is only {achieved_power:.0%} (target is 80%). The test is likely "
+            f"to miss a real effect."
+        )
+    mde_rel = mde_results.get("mde_relative_pct")
+    lift_pct = params.get("expected_lift_pct")
+    if mde_rel and lift_pct and mde_rel > lift_pct * 100:
+        problems.append(
+            f"MDE ({mde_rel:.1f}%) is larger than the expected effect "
+            f"({lift_pct * 100:.1f}%). The test cannot reliably detect the expected lift."
+        )
+    for rf in red_flags:
+        if rf.get("severity") == "critical":
+            problems.append(f"🚨 {rf.get('title', 'Issue')}: {rf.get('detail', '')}")
+    if not problems:
+        problems.append("No critical issues, but review the results to confirm they meet your needs.")
+    return "\n".join(f"- {p}" for p in problems)
+
+
+async def review_results_node(state: SetupState) -> dict:
+    """
+    Present power/MDE results to the user and ask if they want to proceed or adjust.
+
+    Two modes:
+    - First entry (after validation pipeline): Present results summary
+    - Re-entry (user responded): Determine accept or modify
+    """
+    llm = _make_llm()
+    messages = list(state.get("messages", []))
+    method_key = state.get("chosen_method_key", "ab_test")
+    method_name = state.get("chosen_method_name", method_key)
+    params = dict(state.get("setup_params") or {})
+    power_results = dict(state.get("power_results") or {})
+    mde_results = dict(state.get("mde_results") or {})
+    red_flags = list(state.get("red_flags") or [])
+
+    # Determine if this is first entry or re-entry
+    last_msg = messages[-1] if messages else None
+    is_reentry = isinstance(last_msg, HumanMessage)
+
+    if not is_reentry:
+        # ── First entry: present results and ask ──────────────────────────
+        required_n = power_results.get("required_sample_size", "N/A")
+        achieved_power = power_results.get("achieved_power", 0)
+        effect_size = power_results.get("effect_size_used", 0)
+        mde_abs = mde_results.get("mde_absolute")
+        mde_rel = mde_results.get("mde_relative_pct")
+
+        mde_abs_str = f"{mde_abs:.4f}" if mde_abs is not None else "N/A"
+        mde_rel_str = f"{mde_rel:.1f}%" if mde_rel is not None else "N/A"
+
+        # Red flags text
+        if red_flags:
+            rf_parts = []
+            for rf in red_flags:
+                icon = "🚨" if rf.get("severity") == "critical" else "⚠️"
+                rf_parts.append(f"{icon} {rf.get('title', 'Flag')}: {rf.get('detail', '')}")
+            red_flags_text = "\n".join(rf_parts)
+        else:
+            red_flags_text = "No major concerns detected."
+
+        assumptions_text = _build_assumptions_summary(method_key)
+
+        # Build setup params summary
+        param_parts = []
+        if params.get("baseline_rate"):
+            param_parts.append(f"Baseline rate: {params['baseline_rate']:.2%}")
+        if params.get("baseline_metric_value"):
+            param_parts.append(f"Baseline value: {params['baseline_metric_value']:.1f}")
+        if params.get("expected_lift_pct"):
+            param_parts.append(f"Expected lift: {params['expected_lift_pct']:.1%}")
+        elif params.get("expected_lift_abs"):
+            param_parts.append(f"Expected lift: {params['expected_lift_abs']:.4f}")
+        if params.get("num_treatment_units"):
+            param_parts.append(f"Treatment units: {params['num_treatment_units']}")
+        if params.get("num_control_units"):
+            param_parts.append(f"Control units: {params['num_control_units']}")
+        setup_params_summary = "\n".join(f"- {p}" for p in param_parts) if param_parts else "Default parameters"
+
+        review_prompt = REVIEW_RESULTS_PROMPT.format(
+            method_name=method_name,
+            method_key=method_key,
+            setup_params_summary=setup_params_summary,
+            required_n=required_n,
+            achieved_power=f"{achieved_power:.0%}" if achieved_power else "N/A",
+            effect_size=f"{effect_size:.4f}" if effect_size else "N/A",
+            mde_abs=mde_abs_str,
+            mde_rel_pct=mde_rel_str,
+            red_flags_text=red_flags_text,
+            assumptions_text=assumptions_text,
+        )
+
+        response = await llm.ainvoke([
+            SystemMessage(content=SETUP_SYSTEM_PROMPT),
+            HumanMessage(content=review_prompt),
+        ])
+
+        return {
+            "setup_phase": "review_results",
+            "messages": [AIMessage(content=response.content.strip())],
+            "done": False,
+        }
+
+    # ── Re-entry: analyze user response ───────────────────────────────────
+    user_text = last_msg.content
+
+    # Use LLM to determine accept vs modify and extract changes
+    decision_prompt = (
+        f"The user was reviewing their experiment design results and responded:\n\n"
+        f"\"{user_text}\"\n\n"
+        f"Current parameters:\n{json.dumps(params, indent=2, default=str)}\n\n"
+        f"Determine their intent and extract any parameter changes."
+    )
+
+    decision_response = await llm.ainvoke([
+        SystemMessage(content=REVIEW_DECISION_SYSTEM),
+        HumanMessage(content=decision_prompt),
+    ])
+
+    try:
+        decision = json.loads(_strip_json_fence(decision_response.content))
+    except json.JSONDecodeError:
+        decision = {"decision": "modify", "changes": {}, "change_summary": None}
+
+    if decision.get("decision") == "accept":
+        # User accepts → chain to setup_output
+        accept_msg = (
+            "Great, let's finalize your experiment setup! "
+            "Generating your complete setup report now…"
+        )
+        return {
+            "setup_phase": "setup_output",
+            "messages": [AIMessage(content=accept_msg)],
+        }
+
+    # User wants to modify
+    changes = decision.get("changes") or {}
+    # Filter out null values
+    actual_changes = {k: v for k, v in changes.items() if v is not None}
+
+    if actual_changes:
+        # User specified changes → apply and re-run
+        for k, v in actual_changes.items():
+            params[k] = v
+
+        change_summary = decision.get("change_summary") or "your requested changes"
+        rerun_msg = (
+            f"Got it! I've updated the design with {change_summary}. "
+            f"Let me re-run the analysis with these new parameters…"
+        )
+        return {
+            "setup_params": params,
+            "setup_phase": "power_analysis",
+            "messages": [AIMessage(content=rerun_msg)],
+        }
+
+    # User wants to change but was vague → ask specifically
+    problems = _identify_design_problems(
+        power_results, mde_results, red_flags, params, method_key,
+    )
+    redesign_prompt = REDESIGN_ELICIT_PROMPT.format(
+        problems=problems,
+        current_params=json.dumps(params, indent=2, default=str),
+    )
+
+    response = await llm.ainvoke([
+        SystemMessage(content=SETUP_SYSTEM_PROMPT),
+        HumanMessage(content=redesign_prompt),
+    ])
+
+    return {
+        "setup_phase": "redesign_elicit",
+        "messages": [AIMessage(content=response.content.strip())],
+        "done": False,
+    }
+
+
+async def redesign_question_node(state: SetupState) -> dict:
+    """
+    Process the user's specific design change request and trigger re-computation.
+    """
+    llm = _make_llm()
+    messages = list(state.get("messages", []))
+    params = dict(state.get("setup_params") or {})
+
+    last_human = next(
+        (m for m in reversed(messages) if isinstance(m, HumanMessage)),
+        None,
+    )
+
+    if last_human:
+        # Extract parameter changes from user response
+        extract_prompt = (
+            f"The user wants to modify their experiment design parameters.\n\n"
+            f"Their response: \"{last_human.content}\"\n\n"
+            f"Current parameters:\n{json.dumps(params, indent=2, default=str)}\n\n"
+            f"Extract the specific parameter changes."
+        )
+
+        response = await llm.ainvoke([
+            SystemMessage(content=REVIEW_DECISION_SYSTEM),
+            HumanMessage(content=extract_prompt),
+        ])
+
+        try:
+            result = json.loads(_strip_json_fence(response.content))
+            changes = result.get("changes") or {}
+            for k, v in changes.items():
+                if v is not None:
+                    params[k] = v
+            change_summary = result.get("change_summary") or "your changes"
+        except json.JSONDecodeError:
+            change_summary = "your requested adjustments"
+
+    msg = (
+        f"Updated! Re-running the full analysis pipeline with {change_summary}…\n\n"
+        "⏳ Computing power analysis, MDE simulation, synthetic data, and validation…"
+    )
+
+    return {
+        "setup_params": params,
+        "setup_phase": "power_analysis",
+        "messages": [AIMessage(content=msg)],
     }
 
 

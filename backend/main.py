@@ -91,6 +91,15 @@ class SetupResultsResponse(BaseModel):
     red_flags: list[dict[str, Any]] = []
 
 
+class FAQRequest(BaseModel):
+    messages: list[dict[str, str]]  # [{"role": "user", "content": "..."}]
+    method_key: str | None = None   # optional — focus on a specific method
+
+
+class FAQResponse(BaseModel):
+    reply: str
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.post("/sessions", response_model=CreateSessionResponse)
@@ -530,3 +539,52 @@ async def get_method_template(method_key: str) -> dict:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "version": "0.1.0"}
+
+
+# ── FAQ Chat Endpoint ─────────────────────────────────────────────────────────
+
+@app.post("/faq", response_model=FAQResponse)
+async def faq_chat(body: FAQRequest) -> FAQResponse:
+    """
+    Stateless FAQ chat for understanding method assumptions and terminology.
+    Accepts the full conversation history each time.
+    """
+    from langchain_anthropic import ChatAnthropic
+    from langchain_core.messages import AIMessage, SystemMessage
+
+    from .prompts.setup_prompts import FAQ_SYSTEM_PROMPT, METHOD_ASSUMPTIONS
+
+    llm = ChatAnthropic(model="claude-opus-4-5", temperature=0.3, max_tokens=2048)
+
+    # Build system prompt, optionally enriched with specific method info
+    system_content = FAQ_SYSTEM_PROMPT
+    if body.method_key and body.method_key in METHOD_ASSUMPTIONS:
+        method_info = METHOD_ASSUMPTIONS[body.method_key]
+        assumptions_text = "\n\n".join(
+            f"### {a['name']}\n"
+            f"**What it means:** {a['plain_language']}\n"
+            f"**Why it matters:** {a['why_it_matters']}\n"
+            f"**When it's violated:** {a['when_violated']}\n"
+            f"**How to check:** {a['how_to_check']}"
+            for a in method_info["assumptions"]
+        )
+        terms_text = "\n".join(
+            f"- **{term}**: {defn}"
+            for term, defn in method_info.get("key_terms", {}).items()
+        )
+        system_content += (
+            f"\n\n## Focused Method: {method_info['name']}\n\n"
+            f"### Assumptions:\n{assumptions_text}\n\n"
+            f"### Key Terms:\n{terms_text}"
+        )
+
+    messages = [SystemMessage(content=system_content)]
+    for msg in body.messages:
+        if msg["role"] == "user":
+            messages.append(HumanMessage(content=msg["content"]))
+        else:
+            messages.append(AIMessage(content=msg["content"]))
+
+    response = await llm.ainvoke(messages)
+
+    return FAQResponse(reply=response.content.strip())

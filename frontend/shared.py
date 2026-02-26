@@ -54,6 +54,7 @@ COMPUTATION_PHASES = [
     ("mde_simulation",  "🎯 MDE Simulation"),
     ("synthetic_gen",   "🧪 Synthetic Data"),
     ("validation",      "✅ Code Validation"),
+    ("review_results",  "🔍 Results Review"),
     ("setup_output",    "📋 Setup Report"),
 ]
 
@@ -211,6 +212,9 @@ def init_session_state():
         "mde_detail": None,
         # Sensitivity analysis
         "sensitivity_data": None,
+        # FAQ chat
+        "faq_messages": [],
+        "faq_method_key": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -248,6 +252,8 @@ def start_session():
     st.session_state.setup_messages = []
     st.session_state.mde_detail = None
     st.session_state.sensitivity_data = None
+    st.session_state.faq_messages = []
+    st.session_state.faq_method_key = None
 
 
 def send_message(user_text: str):
@@ -311,6 +317,20 @@ def fetch_setup_results():
         st.session_state.sensitivity_data = api("GET", f"/sessions/{sid}/setup/sensitivity")
     except Exception:
         st.session_state.sensitivity_data = None
+
+
+def send_faq_message(user_text: str, method_key: str | None = None):
+    """Send a message to the FAQ chat (stateless endpoint)."""
+    st.session_state.faq_messages.append({"role": "user", "content": user_text})
+    data = api(
+        "POST",
+        "/faq",
+        json={
+            "messages": st.session_state.faq_messages,
+            "method_key": method_key,
+        },
+    )
+    st.session_state.faq_messages.append({"role": "assistant", "content": data["reply"]})
 
 
 # ── Sidebar renderer ───────────────────────────────────────────────────────────

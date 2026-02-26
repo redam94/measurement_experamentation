@@ -467,3 +467,571 @@ Structure the report with:
    and what the team can do about it. If no red flags, say "No major concerns detected."
 7. **Recommendations** — practical next steps before launch, incorporating any warnings
 """
+
+
+# ── Method Assumptions ────────────────────────────────────────────────────────
+
+METHOD_ASSUMPTIONS: dict[str, dict] = {
+    "ab_test": {
+        "name": "A/B Test (Randomised Controlled Trial)",
+        "assumptions": [
+            {
+                "name": "SUTVA (Stable Unit Treatment Value Assumption)",
+                "plain_language": (
+                    "Each person's outcome depends ONLY on whether THEY were in the "
+                    "treatment group — not on what happened to anyone else."
+                ),
+                "why_it_matters": (
+                    "If treatment 'leaks' between groups (e.g., users share a promo "
+                    "code), you'll underestimate the real effect."
+                ),
+                "when_violated": (
+                    "Social products where users interact, viral campaigns, or when "
+                    "treatment affects shared resources like inventory."
+                ),
+                "how_to_check": (
+                    "Look for evidence of spillover: do control users mention seeing "
+                    "the campaign? Are network-connected users in different groups?"
+                ),
+            },
+            {
+                "name": "Random Assignment",
+                "plain_language": (
+                    "Users are randomly split into groups — like flipping a fair coin "
+                    "for each person. No one picks which group they're in."
+                ),
+                "why_it_matters": (
+                    "Without random assignment, the groups might differ in hidden ways "
+                    "(e.g., more engaged users end up in treatment), making results "
+                    "unreliable."
+                ),
+                "when_violated": (
+                    "When assignment is based on user behaviour, geography, or opt-in "
+                    "rather than true randomisation."
+                ),
+                "how_to_check": (
+                    "Check that treatment and control groups look similar on key "
+                    "characteristics (age, past purchases, etc.) before the test starts."
+                ),
+            },
+            {
+                "name": "No Interference / Spillover",
+                "plain_language": (
+                    "The campaign doesn't indirectly affect people in the control group."
+                ),
+                "why_it_matters": (
+                    "If control group members hear about the campaign through word-of-mouth "
+                    "or see it via shared devices, your measured effect is diluted."
+                ),
+                "when_violated": (
+                    "Household-level treatments with user-level assignment, marketplace "
+                    "effects where supply is shared, brand campaigns with broad awareness."
+                ),
+                "how_to_check": (
+                    "Survey control users about campaign awareness; check for geographic "
+                    "or network clustering between groups."
+                ),
+            },
+        ],
+        "key_terms": {
+            "conversion_rate": "The percentage of users who take the desired action (e.g., purchase).",
+            "lift": "The improvement caused by the campaign — the difference between treatment and control.",
+            "statistical_power": "The probability that your test will detect a real effect if one exists. Like a metal detector's sensitivity.",
+            "significance_level": "The threshold for declaring a result 'real' (typically 5%). Lower = stricter.",
+            "MDE": "Minimum Detectable Effect — the smallest real improvement your test can reliably spot.",
+        },
+    },
+    "did": {
+        "name": "Difference-in-Differences (DiD)",
+        "assumptions": [
+            {
+                "name": "Parallel Trends",
+                "plain_language": (
+                    "Before the campaign, the treatment and control groups were following "
+                    "the same trend over time. If one was going up, so was the other."
+                ),
+                "why_it_matters": (
+                    "DiD measures the effect by looking at how the treatment group's trend "
+                    "DIVERGES from the control group's trend after the campaign. If they "
+                    "were already diverging before, the estimate is biased."
+                ),
+                "when_violated": (
+                    "When treatment markets have different seasonality, growth rates, "
+                    "or are affected by other local events during the test."
+                ),
+                "how_to_check": (
+                    "Plot both groups' trends for the pre-period. They should look parallel. "
+                    "Use a placebo test: pretend the campaign started earlier and check for "
+                    "a false 'effect'."
+                ),
+            },
+            {
+                "name": "No Spillover Between Groups",
+                "plain_language": (
+                    "The campaign in treatment markets doesn't affect control markets "
+                    "(e.g., customers don't switch where they shop)."
+                ),
+                "why_it_matters": (
+                    "If treatment draws customers away from control markets, the control "
+                    "group looks worse than it should, inflating the measured effect."
+                ),
+                "when_violated": (
+                    "Adjacent geographic markets, online campaigns where users can see "
+                    "the treatment regardless of their assigned market."
+                ),
+                "how_to_check": (
+                    "Use 'buffer zones' — exclude markets bordering treatment areas. "
+                    "Check if control market outcomes dip during the test."
+                ),
+            },
+            {
+                "name": "Stable Composition",
+                "plain_language": (
+                    "The mix of people or businesses in each group stays roughly the same "
+                    "throughout the test. Nobody important enters or leaves."
+                ),
+                "why_it_matters": (
+                    "If a major retailer opens in a treatment market mid-test, the lift "
+                    "might be from that, not your campaign."
+                ),
+                "when_violated": (
+                    "Markets with high turnover, new store openings, competitor launches, "
+                    "or seasonal population shifts (college towns, tourist areas)."
+                ),
+                "how_to_check": (
+                    "Monitor for large changes in market composition during the test. "
+                    "Exclude markets with known confounding events."
+                ),
+            },
+        ],
+        "key_terms": {
+            "parallel_trends": "The assumption that treatment and control groups follow the same trajectory before the campaign.",
+            "pre_period": "The time window BEFORE the campaign starts — used to establish the baseline trend.",
+            "post_period": "The time window DURING/AFTER the campaign — where we measure the effect.",
+            "treatment_effect": "The extra change in the treatment group beyond what the control group experienced.",
+        },
+    },
+    "ddml": {
+        "name": "Double/Debiased Machine Learning (DDML)",
+        "assumptions": [
+            {
+                "name": "Unconfoundedness (Selection on Observables)",
+                "plain_language": (
+                    "All the important reasons why some people got the campaign and others "
+                    "didn't are captured in the data you have (age, location, past behaviour, etc.)."
+                ),
+                "why_it_matters": (
+                    "If there's a hidden factor that determines both who sees the campaign "
+                    "AND the outcome, the estimate will be biased. DDML can only control "
+                    "for things you measure."
+                ),
+                "when_violated": (
+                    "When treatment depends on unobserved motivation, private information, "
+                    "or decisions you can't track in data."
+                ),
+                "how_to_check": (
+                    "Think hard about what drives treatment assignment. Include as many "
+                    "relevant covariates as possible. Run sensitivity analyses to see "
+                    "how much an unmeasured confounder would need to matter."
+                ),
+            },
+            {
+                "name": "Overlap (Common Support)",
+                "plain_language": (
+                    "For every combination of characteristics in your data, there are "
+                    "some people who got the campaign AND some who didn't."
+                ),
+                "why_it_matters": (
+                    "If a certain type of person ALWAYS gets the campaign (or never does), "
+                    "DDML can't estimate the effect for that type — there's no comparison."
+                ),
+                "when_violated": (
+                    "When treatment is deterministic for some subgroups (e.g., all users "
+                    "in a certain city always see the ad)."
+                ),
+                "how_to_check": (
+                    "Plot the predicted probability of treatment (propensity score). "
+                    "Both groups should have overlapping distributions."
+                ),
+            },
+            {
+                "name": "SUTVA (No Interference)",
+                "plain_language": (
+                    "One person's treatment doesn't affect another person's outcome."
+                ),
+                "why_it_matters": (
+                    "Same as A/B testing — spillover effects bias the results."
+                ),
+                "when_violated": (
+                    "Network effects, marketplace dynamics, or shared resources."
+                ),
+                "how_to_check": (
+                    "Check for clustering in treatment assignment. Look for network "
+                    "connections between treated and untreated users."
+                ),
+            },
+        ],
+        "key_terms": {
+            "covariates": "Background characteristics (age, location, past purchases) used to control for differences between groups.",
+            "propensity_score": "The estimated probability that a person receives the treatment, based on their characteristics.",
+            "cross_fitting": "A technique that prevents overfitting by splitting data into parts and training models on separate folds.",
+            "debiasing": "Removing the bias that comes from using machine learning models for causal estimation.",
+        },
+    },
+    "geo_lift": {
+        "name": "Geo Lift Test",
+        "assumptions": [
+            {
+                "name": "Geographic Targeting is Enforced",
+                "plain_language": (
+                    "The campaign actually runs ONLY in the treatment markets. "
+                    "People in control markets do NOT see the campaign."
+                ),
+                "why_it_matters": (
+                    "If the campaign leaks into control markets (e.g., national TV, "
+                    "social media sharing), the control group is contaminated and "
+                    "you'll underestimate the effect."
+                ),
+                "when_violated": (
+                    "Campaigns with national media components, viral social content, "
+                    "or e-commerce where shipping crosses market boundaries."
+                ),
+                "how_to_check": (
+                    "Verify targeting settings in your ad platform. Monitor campaign "
+                    "reach or impressions in control markets — they should be near zero."
+                ),
+            },
+            {
+                "name": "Market Homogeneity",
+                "plain_language": (
+                    "The markets in your test behave similarly enough that the control "
+                    "markets are a good stand-in for what the treatment markets would "
+                    "have done without the campaign."
+                ),
+                "why_it_matters": (
+                    "If treatment markets are fundamentally different (e.g., big cities "
+                    "vs rural) from control markets, the comparison breaks down."
+                ),
+                "when_violated": (
+                    "When treatment markets are selected for convenience rather than "
+                    "similarity — e.g., picking your biggest markets for treatment."
+                ),
+                "how_to_check": (
+                    "Compare pre-period trends across treatment and control markets. "
+                    "Match markets on size, demographics, and historical KPI patterns."
+                ),
+            },
+            {
+                "name": "No Cross-Market Contamination",
+                "plain_language": (
+                    "What happens in treatment markets doesn't spill over and affect "
+                    "control markets, or vice versa."
+                ),
+                "why_it_matters": (
+                    "If customers in control markets travel to treatment markets (or shop "
+                    "online), they might be exposed to the campaign, diluting the measured "
+                    "effect."
+                ),
+                "when_violated": (
+                    "Adjacent markets with lots of commuting, online businesses where "
+                    "geography is less meaningful, or when brand awareness spreads nationally."
+                ),
+                "how_to_check": (
+                    "Use geographic buffer zones between treatment and control markets. "
+                    "Check for unusual patterns in control market metrics during the test."
+                ),
+            },
+        ],
+        "key_terms": {
+            "geo": "A geographic unit — could be a city, DMA (Designated Market Area), state, or region.",
+            "holdout": "Markets deliberately kept free of the campaign, serving as the control group.",
+            "lift": "The incremental effect of the campaign — how much more happened because of it.",
+            "pre_period": "Weeks of data BEFORE the campaign, used to establish normal patterns.",
+        },
+    },
+    "synthetic_control": {
+        "name": "Synthetic Control Method",
+        "assumptions": [
+            {
+                "name": "No Interference Between Units",
+                "plain_language": (
+                    "The campaign in the treated region doesn't affect the donor "
+                    "(comparison) regions."
+                ),
+                "why_it_matters": (
+                    "The 'synthetic' version of your region is built from donor regions. "
+                    "If those donors are affected by the campaign, the synthetic "
+                    "counterfactual is wrong."
+                ),
+                "when_violated": (
+                    "When the campaign causes customers to shift between regions, "
+                    "or when donor regions compete with the treated region."
+                ),
+                "how_to_check": (
+                    "Check if donor region metrics change after the campaign starts. "
+                    "Use donors that are geographically or economically distant."
+                ),
+            },
+            {
+                "name": "Interpolation, Not Extrapolation",
+                "plain_language": (
+                    "The treated region's behaviour (before the campaign) should fall "
+                    "WITHIN the range of what the donor regions do — not outside it."
+                ),
+                "why_it_matters": (
+                    "Synthetic control creates a weighted average of donors to match "
+                    "the treated region. If the treated region is an outlier, no "
+                    "combination of donors can replicate it."
+                ),
+                "when_violated": (
+                    "When the treated region is much larger, richer, or more urban "
+                    "than all available donors."
+                ),
+                "how_to_check": (
+                    "Compare the treated region's pre-period metrics to the range "
+                    "of donor metrics. The treated values should fall within that range."
+                ),
+            },
+            {
+                "name": "Sufficiently Large Donor Pool",
+                "plain_language": (
+                    "You have enough comparison regions to build a good 'synthetic twin' "
+                    "of your treated region."
+                ),
+                "why_it_matters": (
+                    "More donors give the algorithm more building blocks to construct "
+                    "an accurate counterfactual. Too few donors = poor match."
+                ),
+                "when_violated": (
+                    "When you only have 3-4 potential donor regions, or when most "
+                    "donors are very different from the treated region."
+                ),
+                "how_to_check": (
+                    "Aim for at least 10-15 donors. Check the pre-period fit: "
+                    "does the synthetic control closely track the treated region "
+                    "before the campaign?"
+                ),
+            },
+        ],
+        "key_terms": {
+            "donor_pool": "The set of untreated regions used to construct the synthetic counterfactual.",
+            "synthetic_counterfactual": "A weighted combination of donor regions that mimics what the treated region would have looked like without the campaign.",
+            "pre_period_fit": "How well the synthetic control tracks the treated region before the campaign — a key quality check.",
+            "gap": "The difference between the treated region's actual outcome and the synthetic counterfactual.",
+        },
+    },
+    "matched_market": {
+        "name": "Matched Market Test",
+        "assumptions": [
+            {
+                "name": "Exchangeable Pairs",
+                "plain_language": (
+                    "Within each matched pair, the two markets are similar enough "
+                    "that you could swap which one gets the campaign and expect "
+                    "roughly the same result."
+                ),
+                "why_it_matters": (
+                    "The whole method relies on comparing paired markets. If the pairs "
+                    "aren't well-matched, the comparison is unfair."
+                ),
+                "when_violated": (
+                    "When markets are matched on superficial characteristics (same state) "
+                    "but differ in important ways (one is urban, one is rural)."
+                ),
+                "how_to_check": (
+                    "Compare pre-period KPI trends within each pair. Good pairs should "
+                    "track each other closely. Use correlation or RMSE to quantify match quality."
+                ),
+            },
+            {
+                "name": "No Cross-Market Spillover",
+                "plain_language": (
+                    "The campaign in treatment markets doesn't leak into the paired "
+                    "control markets."
+                ),
+                "why_it_matters": (
+                    "If treatment markets and their control partners are nearby, "
+                    "customers might cross boundaries and dilute the measured effect."
+                ),
+                "when_violated": (
+                    "When paired markets are geographically adjacent, or when the "
+                    "campaign runs on channels that aren't geographically contained."
+                ),
+                "how_to_check": (
+                    "Choose pairs that aren't adjacent. Monitor control market metrics "
+                    "for unexpected changes during the test."
+                ),
+            },
+            {
+                "name": "Match Quality Maintained Throughout Test",
+                "plain_language": (
+                    "The paired markets continue to be comparable during the test — "
+                    "no big external shocks hit one but not the other."
+                ),
+                "why_it_matters": (
+                    "If an unrelated event (competitor opening, weather event) affects "
+                    "only one market in a pair, it looks like a campaign effect."
+                ),
+                "when_violated": (
+                    "During holidays in regions with different shopping patterns, "
+                    "natural disasters, or major local competitor actions."
+                ),
+                "how_to_check": (
+                    "Monitor for unusual events during the test. Run placebo tests "
+                    "on pre-period data to verify that pairs are stable."
+                ),
+            },
+        ],
+        "key_terms": {
+            "matched_pair": "Two markets deliberately chosen because they behave similarly — one gets the campaign, the other doesn't.",
+            "within_pair_difference": "The difference in outcomes between the treatment and control market in each pair.",
+            "match_quality": "How closely the two markets in a pair track each other before the campaign.",
+        },
+    },
+}
+
+
+# ── Review results prompts ───────────────────────────────────────────────────
+
+REVIEW_RESULTS_PROMPT = """\
+You are reviewing experiment design results with a non-technical stakeholder.
+Present the results in plain, friendly language.
+
+Method: {method_name} ({method_key})
+Setup Parameters: {setup_params_summary}
+
+Power Analysis Results:
+- Required sample size: {required_n}
+- Achieved power: {achieved_power}
+- Effect size used: {effect_size}
+
+MDE Results:
+- Minimum Detectable Effect (absolute): {mde_abs}
+- MDE as relative %: {mde_rel_pct}
+
+Red Flags: {red_flags_text}
+
+Key Assumptions for this method:
+{assumptions_text}
+
+Instructions:
+1. Summarize results in 2-3 plain-language sentences. Explain what the numbers mean \
+   practically (e.g., "You'd need about 10,000 customers in your test" not "sample \
+   size is 10,000").
+2. If achieved power is below 0.80 or there are critical red flags, clearly explain \
+   the problem and what it means practically. Use analogies — e.g., "With 65% power, \
+   your test is like a metal detector that misses the nugget 1 out of 3 times."
+3. Briefly mention the top 2-3 assumptions the user should be aware of. Don't go into \
+   exhaustive detail — just note them and mention the FAQ page for more info.
+4. If there are problems, suggest SPECIFIC changes they could make, for example:
+   - "Increase from 10 to 20 markets"
+   - "Extend the test from 4 weeks to 8 weeks"
+   - "Accept a larger minimum detectable effect (15% instead of 5%)"
+5. End by asking: "Would you like to proceed with this design, or would you like \
+   to adjust something? Just tell me what you'd like to change and I'll re-run \
+   the analysis."
+6. Be concise — no more than 15 sentences total. Be encouraging and supportive.
+"""
+
+REVIEW_DECISION_SYSTEM = """\
+You are analyzing a user's response to an experiment design review.
+Determine whether the user wants to:
+1. "accept" — proceed with the current design (they're happy, say "looks good", etc.)
+2. "modify" — make changes to the design parameters
+
+If they want to modify, extract any specific parameter changes they mention.
+Convert percentages to decimals. Interpret colloquial language generously:
+- "more markets" / "bigger sample" → increase num_treatment_units and/or num_control_units
+- "longer test" / "more time" → increase num_post_periods
+- "more history" / "longer pre-period" → increase num_pre_periods
+- "bigger effect" / "larger lift" → increase expected_lift_pct or expected_lift_abs
+- "stricter" / "more confident" → decrease alpha
+- "less strict" / "more lenient" → increase alpha
+- "higher power" → increase power_target
+
+Return ONLY valid JSON:
+{
+  "decision": "accept" or "modify",
+  "changes": {
+    "num_treatment_units": int_or_null,
+    "num_control_units": int_or_null,
+    "num_pre_periods": int_or_null,
+    "num_post_periods": int_or_null,
+    "expected_lift_pct": float_or_null,
+    "expected_lift_abs": float_or_null,
+    "alpha": float_or_null,
+    "power_target": float_or_null,
+    "baseline_metric_value": float_or_null,
+    "baseline_metric_std": float_or_null,
+    "baseline_rate": float_or_null,
+    "cluster_size": int_or_null,
+    "icc": float_or_null
+  },
+  "change_summary": "Brief description of what they want to change, or null"
+}
+"""
+
+REDESIGN_ELICIT_PROMPT = """\
+The user wants to modify their experiment design but hasn't specified enough details yet.
+Based on what you know about their design and the issues identified, ask them \
+specifically what they'd like to change.
+
+Current design problems:
+{problems}
+
+Current parameters:
+{current_params}
+
+Offer concrete options with specific numbers. For example:
+- "Would you like to increase from 10 to 15 or 20 markets?"
+- "Should we extend the test from 4 weeks to 6 or 8 weeks?"
+- "Would a 10% lift target work instead of the current 5%?"
+
+Ask ONE focused question. Be warm and helpful.
+"""
+
+
+# ── FAQ system prompt ─────────────────────────────────────────────────────────
+
+FAQ_SYSTEM_PROMPT = """\
+You are a friendly, patient statistics educator helping a non-technical person \
+understand the assumptions and concepts behind experimental design methods for \
+measuring ad campaign effectiveness.
+
+Your audience may be a marketing manager, brand director, or business owner with \
+NO statistics background. Your job is to make complex concepts crystal clear.
+
+## Guidelines:
+- **Use analogies and real-world examples** liberally. Compare statistical power to \
+  a metal detector's sensitivity. Compare parallel trends to two runners on a treadmill.
+- **Never use jargon without explanation.** If you must use a technical term, \
+  immediately follow it with a plain-language equivalent in parentheses.
+- **Keep answers focused.** Answer the specific question asked, then offer to go deeper.
+- **Use concrete numbers** when explaining concepts: "If your test has 80% power, \
+  imagine running it 10 times — you'd catch the real effect 8 out of 10 times."
+- **Be honest about limitations.** If an assumption is commonly violated in practice, \
+  say so and explain what it means for results.
+- **Relate everything back to their business.** Instead of abstract theory, frame \
+  answers in terms of campaign launches, customer behavior, and marketing ROI.
+
+## Knowledge Base:
+You have deep knowledge of these measurement methods and their assumptions:
+
+1. **A/B Test**: Random assignment, SUTVA, no spillover
+2. **Difference-in-Differences (DiD)**: Parallel trends, no spillover, stable composition
+3. **Double/Debiased ML (DDML)**: Unconfoundedness, overlap, SUTVA
+4. **Geo Lift Test**: Geographic targeting enforced, market homogeneity, no contamination
+5. **Synthetic Control**: No interference, interpolation not extrapolation, donor pool size
+6. **Matched Market Test**: Exchangeable pairs, no spillover, match quality maintained
+
+You also understand key statistical concepts:
+- Statistical power, significance level, p-values
+- Minimum Detectable Effect (MDE)
+- Sample size determination
+- Confidence intervals
+- Type I and Type II errors
+- Effect sizes and practical significance vs statistical significance
+
+When the user asks about a specific method, provide its assumptions with practical \
+examples of when they hold and when they break down.
+"""

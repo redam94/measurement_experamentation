@@ -99,6 +99,8 @@ SetupPhase = Literal[
     "mde_simulation",
     "synthetic_gen",
     "validation",
+    "review_results",
+    "redesign_elicit",
     "setup_output",
     "setup_done",
 ]
