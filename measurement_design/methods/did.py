@@ -1,0 +1,185 @@
+"""
+Difference-in-Differences (DiD) method module.
+"""
+from __future__ import annotations
+
+from .base import ExperimentMethod, DesignSpec, clamp
+
+
+class DifferenceInDifferences(ExperimentMethod):
+    key = "did"
+    name = "Difference-in-Differences (DiD)"
+    short_description = (
+        "Compare the change in outcomes before vs. after the campaign in markets "
+        "that received ads to the same change in markets that did not receive ads."
+    )
+
+    def score(self, facts: dict) -> float:
+        score = 50.0
+
+        # Needs meaningful pre-period history
+        pre_weeks = facts.get("pre_period_weeks") or 0
+        if pre_weeks >= 8:
+            score += 20
+        elif pre_weeks >= 4:
+            score += 8
+        else:
+            score -= 15
+
+        # Needs a control group (some markets without ads)
+        if facts.get("control_group_exists"):
+            score += 15
+        elif facts.get("geo_holdout_feasible"):
+            score += 10
+        else:
+            score -= 15
+
+        # Works at geo/market level
+        if facts.get("randomization_unit") in ("geo", "market"):
+            score += 10
+        elif facts.get("randomization_unit") in ("user", "device"):
+            score -= 5  # still works but A/B is better
+
+        # Needs some markets
+        num_markets = facts.get("num_markets") or 0
+        if num_markets >= 6:
+            score += 5
+        elif num_markets >= 2:
+            score += 0
+        else:
+            score -= 10
+
+        return clamp(score)
+
+    def generate_spec(self, facts: dict, explanation: str = "") -> DesignSpec:
+        pre_weeks = facts.get("pre_period_weeks") or 8
+        duration = facts.get("test_duration_weeks") or 4
+
+        return DesignSpec(
+            method_key=self.key,
+            method_name=self.name,
+            score=self.score(facts),
+            explanation=explanation,
+            primary_objective=facts.get("primary_objective", ""),
+            kpi=facts.get("kpi", ""),
+            treatment_assignment=(
+                "Select treatment markets that receive the campaign. "
+                "Select comparable control markets that do NOT receive the campaign."
+            ),
+            control_definition="Control markets: similar geos kept ad-free for the full test window.",
+            randomization_unit=facts.get("randomization_unit", "geo"),
+            pre_period_weeks=pre_weeks,
+            test_duration_weeks=duration,
+            num_units=facts.get("sample_size_estimate", "unknown"),
+            statistical_approach=(
+                "Bayesian hierarchical DiD: "
+                "Y_it = α_i + β_t + δ·(Treated_i × Post_t) + ε_it"
+            ),
+            primary_model="Bayesian Normal with unit fixed effects and time fixed effects.",
+            minimum_detectable_effect="~10% relative lift for balanced treatment/control market panels.",
+            implementation_steps=[
+                "Identify treatment markets (campaign runs) and control markets (no campaign).",
+                f"Collect {pre_weeks} weeks of pre-period KPI data for all markets.",
+                "Verify parallel trends: treatment and control markets moved similarly before the campaign.",
+                "Launch campaign in treatment markets only.",
+                f"Run campaign for {duration} weeks; collect post-period data.",
+                "Run Bayesian DiD model; report δ (treatment effect) posterior.",
+            ],
+            data_requirements=[
+                "Weekly/daily time-series KPI data per market, pre- and post-campaign.",
+                "Market identifier and treatment assignment flag.",
+                "Optional: market-level covariates for covariate adjustment.",
+            ],
+            assumptions=[
+                "Parallel trends: absent the campaign, treatment and control would have evolved similarly.",
+                "No spillover between treatment and control markets.",
+                "Stable market composition over the measurement window.",
+            ],
+            caveats=[
+                "Pre-test parallel trends MUST be visually and statistically verified.",
+                "Limited markets reduce statistical power; consider Synthetic Control with <5 control units.",
+            ],
+            pros=[
+                "Works without user-level data.",
+                "Handles natural market heterogeneity through fixed effects.",
+                "Widely understood by business stakeholders.",
+            ],
+            cons=[
+                "Parallel trends assumption can be hard to defend for fast-moving markets.",
+                "Requires sufficient pre-period history (≥4 weeks recommended, ≥8 preferred).",
+            ],
+        )
+
+    def generate_scaffold(self, facts: dict) -> str:
+        kpi = facts.get("kpi", "conversions")
+        pre = facts.get("pre_period_weeks") or 8
+        return f'''"""
+Difference-in-Differences — Bayesian Hierarchical Scaffold
+KPI: {kpi} | Pre-period: {pre} weeks
+Generated by the Measurement Design Agent
+"""
+import numpy as np
+import pandas as pd
+import pymc as pm
+import arviz as az
+import matplotlib.pyplot as plt
+
+# ── 1. Load panel data ─────────────────────────────────────────────────────────
+# Expected columns: ["market_id", "week", "kpi", "treated", "post"]
+# treated: 1 for treatment markets, 0 for control
+# post:    1 for post-campaign weeks, 0 for pre-campaign weeks
+df = pd.read_csv("your_panel_data.csv")
+df["treated_x_post"] = df["treated"] * df["post"]
+
+# Encode markets and weeks as integer indices
+markets, market_idx = np.unique(df["market_id"], return_inverse=True)
+weeks,   week_idx   = np.unique(df["week"],      return_inverse=True)
+n_markets = len(markets)
+n_weeks   = len(weeks)
+
+y = df["{kpi}"].values.astype(float)
+
+# ── 2. Bayesian DiD model ──────────────────────────────────────────────────────
+with pm.Model() as did_model:
+    # Hyperpriors
+    sigma_market = pm.HalfNormal("sigma_market", sigma=1)
+    sigma_week   = pm.HalfNormal("sigma_week",   sigma=1)
+
+    # Market fixed effects (random effects for partial pooling)
+    alpha = pm.Normal("alpha_market", mu=0, sigma=sigma_market, shape=n_markets)
+
+    # Week fixed effects
+    beta  = pm.Normal("beta_week",   mu=0, sigma=sigma_week,   shape=n_weeks)
+
+    # Treatment effect (DiD estimand δ)
+    delta = pm.Normal("delta", mu=0, sigma=10)
+
+    # Observation noise
+    sigma_obs = pm.HalfNormal("sigma_obs", sigma=5)
+
+    # Expected value
+    mu = (
+        alpha[market_idx]
+        + beta[week_idx]
+        + delta * df["treated_x_post"].values
+    )
+
+    # Likelihood
+    obs = pm.Normal("obs", mu=mu, sigma=sigma_obs, observed=y)
+
+    # Sample
+    idata = pm.sample(2000, tune=1000, target_accept=0.95, return_inferencedata=True)
+
+# ── 3. Results ─────────────────────────────────────────────────────────────────
+summary = az.summary(idata, var_names=["delta"])
+print(summary)
+
+prob_pos = float((idata.posterior["delta"] > 0).mean())
+print(f"\\nP(δ > 0) = {{prob_pos:.1%}}  [campaign lifted {kpi}]")
+
+az.plot_posterior(idata, var_names=["delta"], ref_val=0)
+plt.title("Posterior of DiD treatment effect (δ)")
+plt.tight_layout()
+plt.savefig("did_posterior.png", dpi=150)
+plt.show()
+'''

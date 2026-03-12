@@ -10,7 +10,7 @@ set -euo pipefail
 
 VENV=".venv"
 API_PORT=8000
-UI_PORT=8501
+UI_PORT=8504
 
 # Activate virtualenv
 if [[ -f "$VENV/bin/activate" ]]; then

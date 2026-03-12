@@ -1,64 +1,23 @@
 """
 LangGraph state schema for the measurement design agent.
+
+Domain types (ElicitedFacts, Phase, etc.) live in the measurement_design
+core library. This module defines the LangGraph-specific AgentState that
+composes those domain types with LangGraph annotations.
 """
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 from typing_extensions import TypedDict
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 
-
-# ── Elicited facts structure ──────────────────────────────────────────────────
-
-class ElicitedFacts(TypedDict, total=False):
-    """Structured knowledge extracted from the conversation."""
-
-    # 1. Objective
-    primary_objective: str          # e.g. "conversion", "awareness", "retention"
-    kpi: str                        # e.g. "revenue", "installs", "ROAS"
-
-    # 2. Randomization unit
-    randomization_unit: str         # "user", "device", "geo", "market", "unknown"
-    can_run_rct: bool               # True if brand controls assignment
-
-    # 3. Data history
-    pre_period_weeks: int | None    # weeks of historical data available
-    has_historical_data: bool
-
-    # 4. Geographic structure
-    num_markets: int | None         # number of distinct geos/markets
-    geo_holdout_feasible: bool
-
-    # 5. Treatment / control
-    campaign_type: str              # "brand_controlled", "platform_only", "observational"
-    control_group_exists: bool
-
-    # 6. Covariate richness
-    has_rich_covariates: bool       # demographic, behavioral, contextual features
-    covariate_description: str
-
-    # 7. Scale / budget
-    sample_size_estimate: str       # "small (<10k)", "medium (10k-1M)", "large (>1M)"
-    test_duration_weeks: int | None
-
-    # Extra free-text context captured by LLM extraction
-    additional_context: str
-
-
-# ── Phase literals ────────────────────────────────────────────────────────────
-
-Phase = Literal["elicit", "clarify", "score", "recommend", "output", "done"]
-
-ELICITATION_TOPICS = [
-    "objective",
-    "randomization",
-    "data_history",
-    "geo_structure",
-    "treatment_control",
-    "covariates",
-    "scale",
-]
+# Re-export domain types for backward compatibility
+from measurement_design.types import (
+    ElicitedFacts,
+    Phase,
+    ELICITATION_TOPICS,
+)
 
 
 # ── Main agent state ──────────────────────────────────────────────────────────

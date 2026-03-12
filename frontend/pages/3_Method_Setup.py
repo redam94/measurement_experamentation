@@ -23,6 +23,7 @@ from shared import (
     require_session,
     send_setup_message,
     start_setup,
+    stream_setup_message,
 )
 
 init_session_state()
@@ -94,8 +95,16 @@ if st.session_state.setup_done:
 
 # Chat input
 if user_input := st.chat_input("Your answer…"):
+    # Show user message immediately
+    st.session_state.setup_messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    # Stream assistant response
     try:
-        send_setup_message(user_input)
+        with st.chat_message("assistant"):
+            response_text = st.write_stream(stream_setup_message(user_input))
+        st.session_state.setup_messages.append({"role": "assistant", "content": response_text})
         st.rerun()
     except Exception as e:
         st.error(f"Error communicating with backend: {e}")

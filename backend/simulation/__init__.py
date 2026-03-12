@@ -1,8 +1,6 @@
 """
-Simulation package — power analysis, Monte Carlo MDE, and synthetic data generation.
+Simulation package — re-exports from measurement_design.simulation.
 """
-from .power import compute_power
-from .mde import compute_mde
-from .synthetic import generate_synthetic_data
+from measurement_design.simulation import compute_power, compute_mde, generate_synthetic_data
 
 __all__ = ["compute_power", "compute_mde", "generate_synthetic_data"]

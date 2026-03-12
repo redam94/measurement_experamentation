@@ -20,6 +20,7 @@ from shared import (
     init_session_state,
     render_sidebar,
     send_faq_message,
+    stream_faq_message,
 )
 
 init_session_state()
@@ -78,11 +79,24 @@ if not st.session_state.faq_messages:
     for i, (label, question) in enumerate(quick_questions):
         with quick_cols[i % 3]:
             if st.button(label, key=f"quick_{i}", use_container_width=True):
-                try:
-                    send_faq_message(question, st.session_state.faq_method_key)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                st.session_state.faq_messages.append({"role": "user", "content": question})
+                st.session_state._faq_pending = question
+                st.rerun()
+
+# ── Handle pending quick-start streaming ────────────────────────────────────────
+pending = st.session_state.get("_faq_pending")
+if pending:
+    del st.session_state["_faq_pending"]
+    # Re-render history so far (user message already appended)
+    for msg in st.session_state.faq_messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+    with st.chat_message("assistant"):
+        response_text = st.write_stream(
+            stream_faq_message(pending, st.session_state.faq_method_key)
+        )
+    st.session_state.faq_messages.append({"role": "assistant", "content": response_text})
+    st.rerun()
 
 # ── Chat history ────────────────────────────────────────────────────────────────
 for msg in st.session_state.faq_messages:
@@ -91,8 +105,18 @@ for msg in st.session_state.faq_messages:
 
 # ── Chat input ──────────────────────────────────────────────────────────────────
 if user_input := st.chat_input("Ask a question about methods, assumptions, or statistics…"):
+    # Show user message immediately
+    st.session_state.faq_messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    # Stream assistant response (real LLM token streaming)
     try:
-        send_faq_message(user_input, st.session_state.faq_method_key)
+        with st.chat_message("assistant"):
+            response_text = st.write_stream(
+                stream_faq_message(user_input, st.session_state.faq_method_key)
+            )
+        st.session_state.faq_messages.append({"role": "assistant", "content": response_text})
         st.rerun()
     except Exception as e:
         st.error(f"Error communicating with backend: {e}")

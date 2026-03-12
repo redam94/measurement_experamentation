@@ -206,20 +206,10 @@ def _build_generation_params(method: str, params: dict, n_rows: int) -> dict:
 
 
 def _generate_locally(method: str, params: dict) -> str | None:
-    """
-    Generate synthetic data using the backend generators directly.
-    """
+    """Generate synthetic data using the core measurement_design generators."""
     try:
-        import sys, os
-        # Add project root so we can import the backend package
-        # __file__ is frontend/pages/5_Data_Templates.py → go up 2 levels to reach project root
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-
-        from backend.simulation.synthetic import (
+        from measurement_design.simulation.synthetic import (
             synthetic_ab_test_proportions,
-            synthetic_ab_test_continuous,
             synthetic_did,
             synthetic_geo_lift,
             synthetic_synthetic_control,

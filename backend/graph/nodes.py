@@ -3,20 +3,23 @@ LangGraph node implementations for the measurement design agent.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from .state import AgentState, ELICITATION_TOPICS
 from ..prompts.system import SYSTEM_PROMPT, WELCOME_MESSAGE
 from ..prompts.questions import TOPIC_INDEX, EXTRACTION_SYSTEM
-from ..scoring.scorer import score_methods, rank_methods, generate_explanations, build_ranked_report_data
-from ..output.report import generate_report
-from ..output.spec import generate_spec_json, generate_spec_yaml
-from ..output.scaffold import generate_combined_scaffold
+from measurement_design.scoring import score_methods, rank_methods, build_ranked_report_data
+from measurement_design.output.report import generate_report
+from measurement_design.output.spec import generate_spec_json, generate_spec_yaml
+from measurement_design.output.scaffold import generate_combined_scaffold
+from ..scoring.scorer import generate_explanations
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -115,12 +118,16 @@ async def _ask_question(
     *,
     is_followup: bool = False,
     missing_info: str | None = None,
+    token_queue: asyncio.Queue | None = None,
 ) -> str:
     """
     Ask the next elicitation question, rephrased naturally given conversation history.
 
     When is_followup=True, the question is a gentle follow-up because the initial
     answer was incomplete. The missing_info describes what we still need.
+
+    When token_queue is provided, streams tokens via llm.astream() and pushes each
+    chunk onto the queue for real-time SSE delivery.
     """
     context = "\n".join(
         [
@@ -194,6 +201,15 @@ async def _ask_question(
         SystemMessage(content=SYSTEM_PROMPT),
         HumanMessage(content=prompt),
     ]
+
+    if token_queue is not None:
+        chunks: list[str] = []
+        async for chunk in llm.astream(messages):
+            if chunk.content:
+                await token_queue.put(chunk.content)
+                chunks.append(chunk.content)
+        return "".join(chunks).strip()
+
     response = await llm.ainvoke(messages)
     return response.content.strip()
 
@@ -220,7 +236,7 @@ async def welcome_node(state: AgentState) -> dict:
     }
 
 
-async def question_node(state: AgentState) -> dict:
+async def question_node(state: AgentState, config: RunnableConfig) -> dict:
     """
     Process the user's latest reply:
       1. Extract structured facts for the current topic.
@@ -231,6 +247,7 @@ async def question_node(state: AgentState) -> dict:
       5. If topics remain, ask the next question.
       6. If all topics done, run a completeness check and set phase='score'.
     """
+    token_queue = (config.get("configurable") or {}).get("token_queue")
     llm = _make_llm()
     covered = list(state.get("covered_topics", []))
     facts = dict(state.get("elicited_facts") or {})
@@ -277,6 +294,7 @@ async def question_node(state: AgentState) -> dict:
             current_meta, messages, facts, llm,
             is_followup=True,
             missing_info=missing_desc,
+            token_queue=token_queue,
         )
         return {
             "elicited_facts": facts,
@@ -294,7 +312,7 @@ async def question_node(state: AgentState) -> dict:
     if still_remaining:
         # Ask the next question and reset follow-up counter
         next_meta = TOPIC_INDEX[still_remaining[0]]
-        question_text = await _ask_question(next_meta, messages, facts, llm)
+        question_text = await _ask_question(next_meta, messages, facts, llm, token_queue=token_queue)
 
         return {
             "elicited_facts": facts,
@@ -314,8 +332,9 @@ async def question_node(state: AgentState) -> dict:
         "followup_round": 0,
     }
 
-async def score_node(state: AgentState) -> dict:
+async def score_node(state: AgentState, config: RunnableConfig) -> dict:
     """Score all six methods and transition to recommend phase."""
+    token_queue = (config.get("configurable") or {}).get("token_queue")
     llm = _make_llm()
     facts = dict(state.get("elicited_facts") or {})
     scores = score_methods(facts)
@@ -330,6 +349,9 @@ async def score_node(state: AgentState) -> dict:
         "against your situation…"
     )
 
+    if token_queue:
+        await token_queue.put(scoring_msg)
+
     return {
         "scores": scores,
         "ranked_methods": ranked,
@@ -338,8 +360,9 @@ async def score_node(state: AgentState) -> dict:
     }
 
 
-async def recommend_node(state: AgentState) -> dict:
+async def recommend_node(state: AgentState, config: RunnableConfig) -> dict:
     """Build ranked summary message from scores and prepare for output."""
+    token_queue = (config.get("configurable") or {}).get("token_queue")
     llm = _make_llm()
     facts = dict(state.get("elicited_facts") or {})
     scores = dict(state.get("scores") or {})
@@ -364,14 +387,19 @@ async def recommend_node(state: AgentState) -> dict:
         "This will just take a moment…"
     )
 
+    summary_text = "\n".join(summary_lines)
+    if token_queue:
+        await token_queue.put(summary_text)
+
     return {
         "phase": "output",
-        "messages": [AIMessage(content="\n".join(summary_lines))],
+        "messages": [AIMessage(content=summary_text)],
     }
 
 
-async def output_node(state: AgentState) -> dict:
+async def output_node(state: AgentState, config: RunnableConfig) -> dict:
     """Generate all three output artifacts and mark the session done."""
+    token_queue = (config.get("configurable") or {}).get("token_queue")
     llm = _make_llm()
     facts = dict(state.get("elicited_facts") or {})
     scores = dict(state.get("scores") or {})
@@ -393,6 +421,9 @@ async def output_node(state: AgentState) -> dict:
         "If you'd like to revisit any assumptions or explore a different scenario, "
         "just start a new session."
     )
+
+    if token_queue:
+        await token_queue.put(done_msg)
 
     return {
         "report_markdown": report_md,

@@ -3,189 +3,52 @@ Shared constants, helpers, and session-state initialisation used by all pages.
 """
 from __future__ import annotations
 
+import json
 import os
-from typing import Any
+from typing import Any, Generator
 
 import httpx
 import streamlit as st
 
+# Import domain knowledge from core library
+from measurement_design.knowledge.schemas import (
+    METHOD_NAMES,
+    METHOD_SCHEMAS,
+    PANEL_METHODS,
+    ALL_TOPICS,
+    ALL_SETUP_TOPICS,
+)
+
 # ── API base URL ────────────────────────────────────────────────────────────────
 API_BASE = os.getenv("API_BASE", "http://localhost:8000")
 
-# ── Topic labels (elicitation) ──────────────────────────────────────────────────
+# ── Topic labels with emojis (UI presentation layer) ─────────────────────────
 TOPIC_LABELS = {
-    "objective":         "🎯 Objective",
-    "randomization":     "🔀 Randomisation",
-    "data_history":      "📅 Data History",
-    "geo_structure":     "🗺  Geography",
-    "treatment_control": "🎛  Treatment Control",
-    "covariates":        "📊 Covariates",
-    "scale":             "📏 Scale & Duration",
+    "objective":         "\U0001F3AF Objective",
+    "randomization":     "\U0001F500 Randomisation",
+    "data_history":      "\U0001F4C5 Data History",
+    "geo_structure":     "\U0001F5FA  Geography",
+    "treatment_control": "\U0001F39B  Treatment Control",
+    "covariates":        "\U0001F4CA Covariates",
+    "scale":             "\U0001F4CF Scale & Duration",
 }
 
-ALL_TOPICS = list(TOPIC_LABELS.keys())
-
-# ── Topic labels (setup) ───────────────────────────────────────────────────────
 SETUP_TOPIC_LABELS = {
-    "baseline_metrics":   "📈 Baseline Metrics",
-    "expected_effect":    "🎯 Expected Effect",
-    "statistical_design": "⚙️ Statistical Design",
-    "method_specific":    "🔧 Method Details",
+    "baseline_metrics":   "\U0001F4C8 Baseline Metrics",
+    "expected_effect":    "\U0001F3AF Expected Effect",
+    "statistical_design": "\u2699\uFE0F Statistical Design",
+    "method_specific":    "\U0001F527 Method Details",
 }
-
-ALL_SETUP_TOPICS = list(SETUP_TOPIC_LABELS.keys())
-
-# ── Method key → display name ──────────────────────────────────────────────────
-METHOD_NAMES = {
-    "ab_test":           "A/B Test",
-    "did":               "Difference-in-Differences",
-    "ddml":              "Double/Debiased ML",
-    "geo_lift":          "Geo Lift Test",
-    "synthetic_control": "Synthetic Control",
-    "matched_market":    "Matched Market Test",
-}
-
-# Methods that have panel / time-series structure
-PANEL_METHODS = {"did", "geo_lift", "synthetic_control", "matched_market"}
 
 # ── Computation phases (setup pipeline) ─────────────────────────────────────────
 COMPUTATION_PHASES = [
-    ("power_analysis",  "📊 Power Analysis"),
-    ("mde_simulation",  "🎯 MDE Simulation"),
-    ("synthetic_gen",   "🧪 Synthetic Data"),
-    ("validation",      "✅ Code Validation"),
-    ("review_results",  "🔍 Results Review"),
-    ("setup_output",    "📋 Setup Report"),
+    ("power_analysis",  "\U0001F4CA Power Analysis"),
+    ("mde_simulation",  "\U0001F3AF MDE Simulation"),
+    ("synthetic_gen",   "\U0001F9EA Synthetic Data"),
+    ("validation",      "\u2705 Code Validation"),
+    ("review_results",  "\U0001F50D Results Review"),
+    ("setup_output",    "\U0001F4CB Setup Report"),
 ]
-
-# ── Data-template schemas per method ────────────────────────────────────────────
-METHOD_SCHEMAS: dict[str, dict[str, Any]] = {
-    "ab_test": {
-        "description": (
-            "User-level data for a randomised A/B test. Each row represents one "
-            "user assigned to either `control` or `treatment`."
-        ),
-        "columns": [
-            {"name": "user_id",   "dtype": "int",    "description": "Unique user identifier",         "example": 1,          "required": True},
-            {"name": "group",     "dtype": "string", "description": "Assignment group",                "example": "control",  "required": True},
-            {"name": "converted", "dtype": "int",    "description": "Binary conversion flag (0/1)",    "example": 0,          "required": False},
-            {"name": "outcome",   "dtype": "float",  "description": "Continuous outcome metric",       "example": 42.5,       "required": False},
-        ],
-        "notes": "Include *either* `converted` (proportions test) or `outcome` (continuous test), not both.",
-        "form_fields": {
-            "n_per_group":    {"label": "Users per group",    "type": "int",   "default": 1000, "min": 10},
-            "baseline_rate":  {"label": "Baseline conv rate", "type": "float", "default": 0.05, "min": 0.001, "max": 0.999},
-            "lift_abs":       {"label": "Expected lift (abs)","type": "float", "default": 0.005},
-        },
-    },
-    "did": {
-        "description": (
-            "Panel data for Difference-in-Differences. Each row is one unit × one time period."
-        ),
-        "columns": [
-            {"name": "unit_id",  "dtype": "string", "description": "Unit / market identifier",          "example": "T_1",     "required": True},
-            {"name": "group",    "dtype": "string", "description": "treatment or control",              "example": "treatment","required": True},
-            {"name": "period",   "dtype": "int",    "description": "Time period index (1-based)",       "example": 1,         "required": True},
-            {"name": "is_post",  "dtype": "int",    "description": "1 if post-treatment, else 0",       "example": 0,         "required": True},
-            {"name": "outcome",  "dtype": "float",  "description": "Outcome metric value",              "example": 105.3,     "required": True},
-        ],
-        "notes": "Ensure balanced panel: every unit should appear in every period.",
-        "form_fields": {
-            "num_treatment_units": {"label": "# Treatment units",  "type": "int",   "default": 5,    "min": 1},
-            "num_control_units":   {"label": "# Control units",    "type": "int",   "default": 10,   "min": 1},
-            "num_pre_periods":     {"label": "# Pre periods",      "type": "int",   "default": 12,   "min": 1},
-            "num_post_periods":    {"label": "# Post periods",     "type": "int",   "default": 8,    "min": 1},
-            "baseline_value":      {"label": "Baseline metric mean","type": "float", "default": 100.0},
-            "baseline_std":        {"label": "Baseline metric std", "type": "float", "default": 30.0, "min": 0.01},
-            "lift_abs":            {"label": "Expected lift (abs)", "type": "float", "default": 5.0},
-        },
-    },
-    "geo_lift": {
-        "description": (
-            "Market-level weekly data for a Geo Lift test. Each row is one geo × one week."
-        ),
-        "columns": [
-            {"name": "geo_id",    "dtype": "string", "description": "Geography / DMA identifier",      "example": "geo_001",  "required": True},
-            {"name": "group",     "dtype": "string", "description": "treatment or control",             "example": "control",  "required": True},
-            {"name": "week",      "dtype": "int",    "description": "Week number (1-based)",            "example": 1,          "required": True},
-            {"name": "is_post",   "dtype": "int",    "description": "1 if post-treatment, else 0",      "example": 0,          "required": True},
-            {"name": "kpi_value", "dtype": "float",  "description": "KPI value (e.g. sales, signups)", "example": 4850.0,     "required": True},
-        ],
-        "notes": "Include sufficient pre-period weeks (≥ 8) for the model to learn geo-level patterns.",
-        "form_fields": {
-            "num_treatment_geos": {"label": "# Treatment geos",   "type": "int",   "default": 5,    "min": 1},
-            "num_control_geos":   {"label": "# Control geos",     "type": "int",   "default": 15,   "min": 1},
-            "num_pre_periods":    {"label": "# Pre weeks",         "type": "int",   "default": 12,   "min": 1},
-            "num_post_periods":   {"label": "# Post weeks",        "type": "int",   "default": 6,    "min": 1},
-            "baseline_value":     {"label": "Baseline KPI/week",   "type": "float", "default": 5000.0},
-            "baseline_std":       {"label": "Baseline std",        "type": "float", "default": 1500.0, "min": 0.01},
-            "lift_abs":           {"label": "Expected lift (abs)", "type": "float", "default": 250.0},
-        },
-    },
-    "synthetic_control": {
-        "description": (
-            "Time-series data for Synthetic Control. One treated unit + J donor units."
-        ),
-        "columns": [
-            {"name": "unit_id",    "dtype": "string", "description": "Unit identifier (treatment or donor_NNN)","example": "treatment","required": True},
-            {"name": "is_treated", "dtype": "int",    "description": "1 for treated unit, 0 for donors",        "example": 1,          "required": True},
-            {"name": "period",     "dtype": "int",    "description": "Time period index (1-based)",              "example": 1,          "required": True},
-            {"name": "is_post",    "dtype": "int",    "description": "1 if post-treatment, else 0",              "example": 0,          "required": True},
-            {"name": "outcome",    "dtype": "float",  "description": "Outcome metric value",                     "example": 98.7,       "required": True},
-        ],
-        "notes": "Long pre-periods (≥ 20) improve the quality of the synthetic counterfactual.",
-        "form_fields": {
-            "num_donor_units":  {"label": "# Donor units",       "type": "int",   "default": 15,   "min": 2},
-            "num_pre_periods":  {"label": "# Pre periods",       "type": "int",   "default": 52,   "min": 5},
-            "num_post_periods": {"label": "# Post periods",      "type": "int",   "default": 12,   "min": 1},
-            "baseline_value":   {"label": "Baseline metric mean","type": "float", "default": 100.0},
-            "baseline_std":     {"label": "Baseline metric std", "type": "float", "default": 20.0, "min": 0.01},
-            "lift_abs":         {"label": "Expected lift (abs)", "type": "float", "default": 10.0},
-        },
-    },
-    "matched_market": {
-        "description": (
-            "Paired market data for a Matched Market test. Each pair has one treatment and one control market."
-        ),
-        "columns": [
-            {"name": "pair_id",   "dtype": "int",    "description": "Matched pair identifier",          "example": 1,             "required": True},
-            {"name": "market_id", "dtype": "string", "description": "Market identifier",                "example": "pair_1_T",    "required": True},
-            {"name": "group",     "dtype": "string", "description": "treatment or control",             "example": "treatment",   "required": True},
-            {"name": "week",      "dtype": "int",    "description": "Week number (1-based)",            "example": 1,             "required": True},
-            {"name": "is_post",   "dtype": "int",    "description": "1 if post-treatment, else 0",      "example": 0,             "required": True},
-            {"name": "kpi_value", "dtype": "float",  "description": "KPI value for that market/week",   "example": 5200.0,        "required": True},
-        ],
-        "notes": "Markets within each pair should be as similar as possible in pre-period KPI trends.",
-        "form_fields": {
-            "num_pairs":        {"label": "# Market pairs",      "type": "int",   "default": 6,    "min": 2},
-            "num_pre_periods":  {"label": "# Pre weeks",         "type": "int",   "default": 8,    "min": 1},
-            "num_post_periods": {"label": "# Post weeks",        "type": "int",   "default": 4,    "min": 1},
-            "baseline_value":   {"label": "Baseline KPI/week",   "type": "float", "default": 5000.0},
-            "baseline_std":     {"label": "Baseline std",        "type": "float", "default": 1500.0, "min": 0.01},
-            "lift_abs":         {"label": "Expected lift (abs)", "type": "float", "default": 250.0},
-        },
-    },
-    "ddml": {
-        "description": (
-            "Observational data with covariates for Double/Debiased ML. "
-            "Each row is one observational unit."
-        ),
-        "columns": [
-            {"name": "user_id",   "dtype": "int",   "description": "Unique user identifier",                 "example": 1,      "required": True},
-            {"name": "x_1…x_K",   "dtype": "float", "description": "Covariate columns (confounders)",        "example": 0.34,   "required": True},
-            {"name": "treatment", "dtype": "int",   "description": "Binary treatment indicator (0/1)",        "example": 1,      "required": True},
-            {"name": "outcome",   "dtype": "float", "description": "Continuous outcome metric",               "example": 105.2,  "required": True},
-        ],
-        "notes": "Include as many pre-treatment covariates as possible to satisfy the unconfoundedness assumption.",
-        "form_fields": {
-            "n_obs":         {"label": "# Observations",  "type": "int",   "default": 5000, "min": 100},
-            "n_covariates":  {"label": "# Covariates",    "type": "int",   "default": 10,   "min": 1, "max": 50},
-            "baseline_value":{"label": "Baseline mean",   "type": "float", "default": 100.0},
-            "baseline_std":  {"label": "Baseline std",    "type": "float", "default": 30.0, "min": 0.01},
-            "lift_abs":      {"label": "Expected lift",   "type": "float", "default": 5.0},
-        },
-    },
-}
 
 
 # ── Session state initialisation ───────────────────────────────────────────────
@@ -333,6 +196,143 @@ def send_faq_message(user_text: str, method_key: str | None = None):
     st.session_state.faq_messages.append({"role": "assistant", "content": data["reply"]})
 
 
+# ── Streaming API helpers ───────────────────────────────────────────────────────
+
+def _iter_sse(method: str, path: str, **kwargs) -> Generator[dict, None, None]:
+    """Low-level SSE consumer — yields parsed JSON event dicts."""
+    url = f"{API_BASE}{path}"
+    with httpx.stream(method, url, timeout=300, **kwargs) as resp:
+        resp.raise_for_status()
+        for line in resp.iter_lines():
+            if not line.startswith("data: "):
+                continue
+            try:
+                yield json.loads(line[6:])
+            except json.JSONDecodeError:
+                continue
+
+
+def stream_message(user_text: str) -> Generator[str, None, None]:
+    """Generator yielding response tokens for elicitation streaming.
+
+    Side-effect: updates session state from the final metadata event.
+    Intended for use with ``st.write_stream()``.
+    """
+    sid = st.session_state.session_id
+    for data in _iter_sse(
+        "POST", f"/sessions/{sid}/turn/stream", json={"message": user_text}
+    ):
+        if "token" in data:
+            yield data["token"]
+        if data.get("done"):
+            st.session_state.phase = data.get("phase", "")
+            st.session_state.done = data.get("is_done", False)
+            st.session_state.covered_topics = data.get("covered_topics", [])
+            if data.get("is_done"):
+                fetch_report()
+
+
+def stream_setup_message(user_text: str) -> Generator[str, None, None]:
+    """Generator yielding response tokens for setup streaming.
+
+    Side-effect: updates setup session state from the final metadata event.
+    """
+    sid = st.session_state.session_id
+    for data in _iter_sse(
+        "POST", f"/sessions/{sid}/setup/turn/stream", json={"message": user_text}
+    ):
+        if "token" in data:
+            yield data["token"]
+        if data.get("done"):
+            st.session_state.setup_phase = data.get("setup_phase", "")
+            st.session_state.setup_done = data.get("setup_done", False)
+            st.session_state.setup_topics_covered = data.get(
+                "setup_topics_covered", []
+            )
+            st.session_state.red_flags = data.get("red_flags", [])
+            if data.get("setup_done"):
+                fetch_setup_results()
+
+
+def stream_faq_message(
+    user_text: str, method_key: str | None = None
+) -> Generator[str, None, None]:
+    """Generator yielding real LLM tokens for FAQ streaming."""
+    for data in _iter_sse(
+        "POST",
+        "/faq/stream",
+        json={
+            "messages": st.session_state.faq_messages
+            + [{"role": "user", "content": user_text}],
+            "method_key": method_key,
+        },
+    ):
+        if "token" in data:
+            yield data["token"]
+
+
+# ── Session listing / resumption ────────────────────────────────────────────────
+
+def list_recent_sessions() -> list[dict]:
+    """Fetch the list of persisted sessions from the backend."""
+    try:
+        return api("GET", "/sessions")
+    except Exception:
+        return []
+
+
+def restore_session_state(session_id: str):
+    """Load a previously saved session and populate session state."""
+    data = api("GET", f"/sessions/{session_id}/restore")
+
+    st.session_state.session_id = data["session_id"]
+    st.session_state.phase = data.get("phase", "")
+    st.session_state.done = data.get("done", False)
+    st.session_state.covered_topics = data.get("covered_topics", [])
+    st.session_state.messages = data.get("messages", [])
+
+    # Report data
+    if data.get("done") and data.get("report"):
+        st.session_state.report = data["report"]
+    elif data.get("done"):
+        try:
+            fetch_report()
+        except Exception:
+            st.session_state.report = None
+    else:
+        st.session_state.report = None
+
+    # Setup session (if previously started)
+    setup = data.get("setup")
+    if setup and setup.get("active"):
+        st.session_state.setup_active = True
+        st.session_state.chosen_method = setup.get("chosen_method_key", "")
+        st.session_state.setup_phase = setup.get("setup_phase", "")
+        st.session_state.setup_done = setup.get("setup_done", False)
+        st.session_state.setup_topics_covered = setup.get("setup_topics_covered", [])
+        st.session_state.red_flags = setup.get("red_flags", [])
+        st.session_state.setup_messages = setup.get("messages", [])
+        if setup.get("setup_done"):
+            try:
+                fetch_setup_results()
+            except Exception:
+                st.session_state.setup_results = None
+    else:
+        st.session_state.setup_active = False
+        st.session_state.setup_phase = None
+        st.session_state.setup_done = False
+        st.session_state.setup_topics_covered = []
+        st.session_state.setup_results = None
+        st.session_state.chosen_method = None
+        st.session_state.red_flags = []
+        st.session_state.setup_messages = []
+
+    st.session_state.mde_detail = None
+    st.session_state.sensitivity_data = None
+    st.session_state.faq_messages = []
+    st.session_state.faq_method_key = None
+
+
 # ── Sidebar renderer ───────────────────────────────────────────────────────────
 
 def render_sidebar():
@@ -355,6 +355,28 @@ def render_sidebar():
         # ── Session info ────────────────────
         if st.session_state.session_id:
             st.caption(f"Session: `{st.session_state.session_id[:8]}…`")
+
+        # ── Recent sessions ─────────────────
+        recent = list_recent_sessions()
+        if recent:
+            with st.expander("📂 Recent Sessions", expanded=False):
+                for sess in recent[:10]:
+                    sid = sess.get("session_id", "")
+                    label = sess.get("label", sid[:8])
+                    updated = sess.get("updated_at", "")[:16]
+                    is_current = sid == st.session_state.session_id
+                    btn_label = f"{'● ' if is_current else ''}{label}  ({updated})"
+                    if st.button(
+                        btn_label,
+                        key=f"restore_{sid}",
+                        use_container_width=True,
+                        disabled=is_current,
+                    ):
+                        try:
+                            restore_session_state(sid)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Could not restore session: {e}")
 
         st.divider()
 

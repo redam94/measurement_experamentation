@@ -72,6 +72,30 @@ csv_data = results.get("synthetic_data_csv", "")
 df_synth = _parse_csv(csv_data)
 
 
+def _detect_columns(df: pd.DataFrame) -> dict[str, str | None]:
+    """Identify standard outcome, group, time, and unit columns in synthetic data."""
+    result: dict[str, str | None] = {
+        "outcome": None, "group": None, "time": None, "unit": None,
+    }
+    for c in ["converted", "outcome", "kpi_value"]:
+        if c in df.columns:
+            result["outcome"] = c
+            break
+    for c in ["group", "is_treated"]:
+        if c in df.columns:
+            result["group"] = c
+            break
+    for c in ["period", "week"]:
+        if c in df.columns:
+            result["time"] = c
+            break
+    for c in ["unit_id", "geo_id", "market_id"]:
+        if c in df.columns:
+            result["unit"] = c
+            break
+    return result
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Tabs
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -277,18 +301,9 @@ with tab_dist:
     st.markdown("### Synthetic Data Distributions")
 
     if df_synth is not None and not df_synth.empty:
-        # Identify the outcome column and group column
-        outcome_col = None
-        group_col = None
-
-        for c in ["converted", "outcome", "kpi_value"]:
-            if c in df_synth.columns:
-                outcome_col = c
-                break
-        for c in ["group", "is_treated"]:
-            if c in df_synth.columns:
-                group_col = c
-                break
+        cols = _detect_columns(df_synth)
+        outcome_col = cols["outcome"]
+        group_col = cols["group"]
 
         if outcome_col and group_col:
             # If is_treated is int, map to labels
@@ -375,24 +390,10 @@ with tab_ts:
             "This visualisation is designed for panel / geo-based methods."
         )
     elif df_synth is not None and not df_synth.empty:
-        # Identify columns
-        time_col = None
-        for c in ["period", "week"]:
-            if c in df_synth.columns:
-                time_col = c
-                break
-
-        outcome_col = None
-        for c in ["outcome", "kpi_value"]:
-            if c in df_synth.columns:
-                outcome_col = c
-                break
-
-        group_col = None
-        for c in ["group", "is_treated"]:
-            if c in df_synth.columns:
-                group_col = c
-                break
+        cols = _detect_columns(df_synth)
+        time_col = cols["time"]
+        outcome_col = cols["outcome"]
+        group_col = cols["group"]
 
         if time_col and outcome_col and group_col:
             ts_df = df_synth.copy()
@@ -459,11 +460,7 @@ with tab_ts:
 
             # Optional: individual units
             with st.expander("Show individual unit traces"):
-                unit_col = None
-                for c in ["unit_id", "geo_id", "market_id"]:
-                    if c in ts_df.columns:
-                        unit_col = c
-                        break
+                unit_col = cols["unit"]
                 if unit_col:
                     fig_units = px.line(
                         ts_df,
