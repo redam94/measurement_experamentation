@@ -1,12 +1,10 @@
 """
 LLM adapter: implements the LLMService port using ChatAnthropic.
-
-Also contains generate_explanations(), which was split from the pure scorer
-because it requires LLM interaction.
 """
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_anthropic import ChatAnthropic
@@ -47,3 +45,13 @@ class AnthropicLLMService:
             lines = [l for l in lines if not l.strip().startswith("```")]
             text = "\n".join(lines)
         return json.loads(text)
+
+    async def stream_text(self, system_prompt: str, user_prompt: str) -> AsyncIterator[str]:
+        """Stream text tokens from the LLM as an async iterator."""
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt),
+        ]
+        async for chunk in self._llm.astream(messages):
+            if chunk.content:
+                yield chunk.content

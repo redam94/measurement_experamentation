@@ -9,6 +9,7 @@ These are abstract interfaces that the domain defines and infrastructure
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
 from .types import PowerResults, MDEResults, SyntheticDataResult
@@ -26,6 +27,10 @@ class LLMService(Protocol):
 
     async def generate_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         """Generate structured JSON from the LLM."""
+        ...
+
+    def stream_text(self, system_prompt: str, user_prompt: str) -> AsyncIterator[str]:
+        """Stream text tokens from the LLM as an async iterator."""
         ...
 
 

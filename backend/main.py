@@ -700,7 +700,7 @@ def _build_faq_messages(body: FAQRequest):
     """Construct the LLM messages list for FAQ chat."""
     from langchain_core.messages import SystemMessage
     from measurement_design.knowledge import METHOD_ASSUMPTIONS
-    from .prompts.setup_prompts import FAQ_SYSTEM_PROMPT
+    from measurement_design.prompts.setup_prompts import FAQ_SYSTEM_PROMPT
 
     system_content = FAQ_SYSTEM_PROMPT
     if body.method_key and body.method_key in METHOD_ASSUMPTIONS:
